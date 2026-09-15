@@ -20,7 +20,12 @@ from PySide6.QtCore import QObject, Signal
 from .document import Sentence
 from .engines import Clip, Engine, EngineError
 
-PREFETCH = 3          # sentences rendered ahead of the one playing
+# Sentences rendered ahead of the one playing. Three was ample at 1x, where a
+# sentence takes several seconds to speak and Edge's round trip fits inside it
+# comfortably. At 5x a sentence is gone in well under a second while the round
+# trip has not moved, so the queue has to be deeper or the reading stutters
+# between sentences -- which is exactly where it is least wanted.
+PREFETCH = 5
 BLOCK_FRAMES = 1024   # write size; small enough that pause feels instant
 _NORMALISE = re.compile(r"[^\w']+", re.UNICODE)
 
@@ -75,7 +80,7 @@ class Player(QObject):
         self._voice = ""
         self._rate = 1.0
 
-        self._pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="mimick-tts")
+        self._pool = ThreadPoolExecutor(max_workers=3, thread_name_prefix="mimick-tts")
         self._clips: dict[int, Future[Clip]] = {}
         self._lock = threading.Lock()
 
@@ -209,7 +214,7 @@ class Player(QObject):
             if future is None:
                 sentence = self._sentences[index]
                 engine, voice, rate = self._engine, self._voice, self._rate
-                future = self._pool.submit(engine.synthesize, sentence.text, voice, rate)
+                future = self._pool.submit(engine.render, sentence.text, voice, rate)
                 self._clips[index] = future
         return future
 

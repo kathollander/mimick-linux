@@ -38,6 +38,7 @@ CARD_PAD = 10          # padding inside a note card
 CARD_GAP = 8           # smallest gap between stacked cards
 CARD_MIN_HEIGHT = 34
 HEADING_GAP = 2        # between a note's heading and its body
+REMOVE_SIZE = 18       # the little x that takes a highlight away
 NOTES_WHEEL_STEP = 90  # how far one wheel notch moves the notes column
 
 
@@ -54,6 +55,11 @@ class PageView(QAbstractScrollArea):
     # there was one. The window builds the menu, because what belongs on it
     # depends on the player and the selection, which live there.
     context_requested = Signal(int, float, float, object)   # page, x, y, annotation|None
+    # A right-click on a note card in the panel. Separate from the one above
+    # because there is no point on the page to report -- the card is beside it.
+    card_context_requested = Signal(object)                 # the annotation
+    # The little x on a picked-out highlight or its card was clicked.
+    annotation_remove_requested = Signal(object)            # the annotation
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -71,6 +77,9 @@ class PageView(QAbstractScrollArea):
         self._store = None                   # AnnotationStore, once a file is open
         self._show_notes = True
         self._active_note = None
+        # Where the remove badges were last painted, so a click can find them.
+        # Rebuilt on every paint, because they move with the page and the panel.
+        self._remove_targets: list[tuple[object, QRect]] = []
         # The notes panel is its own column: it shows one page's notes at a
         # time, stacked from the top, and scrolls independently of the page.
         self._notes_scroll = 0
@@ -391,6 +400,25 @@ class PageView(QAbstractScrollArea):
         """Left edge of the notes panel, in viewport coordinates."""
         return self.viewport().width() - NOTE_GUTTER
 
+    def notes_gutter_rect(self) -> QRect:
+        """The notes column, in viewport coordinates. Empty when it is off.
+
+        Used by the markup bar to tell a drop onto the notes panel from a drop
+        onto the page.
+        """
+        if not self._show_notes:
+            return QRect()
+        return QRect(self._margin_starts_at(), 0, NOTE_GUTTER, self.viewport().height())
+
+    def refresh_panel_widgets(self) -> None:
+        """Re-measure the docked header and footer and put them back.
+
+        Anything that changes what the notes panel header contains -- the
+        markup bar arriving in it or leaving it -- changes its height, and the
+        header is positioned by hand rather than by a layout.
+        """
+        self._position_panel_widgets()
+
     def _page_area(self) -> QRect:
         """The part of the window the page may occupy, left of the notes panel."""
         width = self.viewport().width() - self._gutter_width()
@@ -465,7 +493,12 @@ class PageView(QAbstractScrollArea):
             return False
         point = event.pos()
         if self._show_notes and point.x() >= self._margin_starts_at():
-            return False          # the notes column has nothing to offer yet
+            card = self._annotation_at(point)
+            if card is None:
+                return False
+            self.set_active_note(card)
+            self.card_context_requested.emit(card)
+            return True
         located = self._locate(point)
         if located is None:
             return False
@@ -474,6 +507,9 @@ class PageView(QAbstractScrollArea):
         return True
 
     def _paint(self, event) -> None:
+        # Badges are recorded as they are drawn, so the list starts empty each
+        # time round; anything left from the last paint is out of date.
+        self._remove_targets = []
         painter = QPainter(self.viewport())
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
@@ -634,6 +670,11 @@ class PageView(QAbstractScrollArea):
         self._position_panel_widgets()
         self._relayout()
 
+    @property
+    def active_note(self):
+        """The highlight or note card currently picked out, if any."""
+        return self._active_note
+
     def set_active_note(self, item) -> None:
         self._active_note = item
         if item is not None:
@@ -787,6 +828,51 @@ class PageView(QAbstractScrollArea):
             painter.setBrush(QColor(int(red * 255), int(green * 255), int(blue * 255), alpha))
             for rect in item.rects:
                 painter.drawRoundedRect(self._to_widget(rect, page), 2, 2)
+            # Only the picked-out one offers to be removed. Every highlight
+            # carrying a little x would make the page unreadable, and a badge
+            # under the cursor by accident is a badge clicked by accident.
+            #
+            # It goes out in the page's own margin, level with the last line of
+            # the highlight, rather than at the end of the highlighted words:
+            # a highlight usually stops in the middle of a line, so a badge
+            # there sits squarely on top of the next word.
+            if item is self._active_note and item.rects:
+                last = self._to_widget(item.rects[-1], page)
+                origin = self._origin(page) - self._scroll_offset()
+                margin = origin.x() + self._sizes[page].width() - REMOVE_SIZE
+                self._draw_remove_badge(
+                    painter, item,
+                    QPoint(max(margin, last.right() + REMOVE_SIZE), last.center().y()),
+                    on_paper=True)
+
+    def _draw_remove_badge(self, painter: QPainter, item, centre: QPoint,
+                           on_paper: bool = False) -> None:
+        """A small x that takes the highlight away when clicked.
+
+        Recorded in ``_remove_targets`` as it is drawn, so hit-testing cannot
+        disagree with what is on the screen -- the badge moves with the page,
+        the zoom and the panel's own scrolling, and anything that worked out
+        its position a second time would eventually work out a different one.
+        """
+        radius = REMOVE_SIZE // 2
+        box = QRect(centre.x() - radius, centre.y() - radius, REMOVE_SIZE, REMOVE_SIZE)
+        painter.save()
+        if on_paper:
+            # On the page it has white paper behind it, so it needs a body of
+            # its own or it reads as a smudge on the document.
+            painter.setBrush(QColor(250, 250, 252))
+            painter.setPen(QPen(QColor(120, 128, 142), 1.2))
+            painter.drawEllipse(box)
+            painter.setPen(QPen(QColor(90, 96, 110), 1.6))
+        else:
+            # On a card it is already on Mimick's own dark panel; a filled
+            # circle there would shout.
+            painter.setPen(QPen(QColor(theme.TEXT_DIM), 1.4))
+        inner = box.adjusted(4, 4, -4, -4)
+        painter.drawLine(inner.topLeft(), inner.bottomRight())
+        painter.drawLine(inner.topRight(), inner.bottomLeft())
+        painter.restore()
+        self._remove_targets.append((item, box))
 
     def _draw_note_cards(self, painter: QPainter, page: int) -> None:
         """Paint this page's note cards in the panel."""
@@ -822,6 +908,12 @@ class PageView(QAbstractScrollArea):
             painter.drawRoundedRect(QRect(card.left(), card.top() + 6, 3, card.height() - 12), 2, 2)
 
             text_area = card.adjusted(CARD_PAD, CARD_PAD, -CARD_PAD, -CARD_PAD)
+            if active:
+                self._draw_remove_badge(
+                    painter, item,
+                    QPoint(card.right() - REMOVE_SIZE, card.top() + REMOVE_SIZE))
+                # Keep the words clear of it.
+                text_area.setRight(text_area.right() - REMOVE_SIZE)
             heading = item.heading
             if heading:
                 bold = self._heading_font()
@@ -844,6 +936,13 @@ class PageView(QAbstractScrollArea):
             painter.drawText(text_area, int(Qt.TextFlag.TextWordWrap),
                              item.note or item.preview)
             painter.setFont(font)
+
+    def _remove_target_at(self, point: QPoint):
+        """The annotation whose remove badge is under ``point``, if any."""
+        for item, box in self._remove_targets:
+            if box.contains(point):
+                return item
+        return None
 
     def _annotation_at(self, point: QPoint):
         """A note card or highlight under a viewport point, if any."""
@@ -943,6 +1042,13 @@ class PageView(QAbstractScrollArea):
         self._press_point = event.position().toPoint()
         self._dragging = False
 
+        # The remove badge is checked first: it sits on top of the highlight it
+        # belongs to, so testing the highlight first would swallow every click.
+        removing = self._remove_target_at(self._press_point)
+        if removing is not None:
+            self.annotation_remove_requested.emit(removing)
+            return
+
         # A click on a highlight or its note card picks that up instead of
         # starting a new text selection.
         existing = self._annotation_at(self._press_point)
@@ -966,9 +1072,16 @@ class PageView(QAbstractScrollArea):
         self.viewport().update()
 
     def _on_move(self, event) -> None:
-        if self._document is None or self._anchor < 0 or self._press_point is None:
+        if self._document is None:
             return
         if not (event.buttons() & Qt.MouseButton.LeftButton):
+            # Not dragging: the only thing to do is say when the cursor is over
+            # a remove badge, which otherwise gives no sign it can be clicked.
+            over = self._remove_target_at(event.position().toPoint()) is not None
+            self.viewport().setCursor(Qt.CursorShape.PointingHandCursor if over
+                                      else Qt.CursorShape.ArrowCursor)
+            return
+        if self._anchor < 0 or self._press_point is None:
             return
         point = event.position().toPoint()
         if not self._dragging and (point - self._press_point).manhattanLength() < 4:

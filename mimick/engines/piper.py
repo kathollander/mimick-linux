@@ -208,6 +208,15 @@ class PiperEngine(Engine):
     name = "Piper (offline)"
     needs_network = False
 
+    # length_scale compresses each phoneme but not the pauses between them, so
+    # what is asked for and what is heard part company as it rises: measured on
+    # en_GB-alan-medium, 1.5 asked gives 1.44 heard, 2.0 gives 1.78 and 6.0
+    # only 2.61. Up to 1.5 the compression still sounds like a person reading
+    # faster, which beats ffmpeg, and is close enough to honest that the error
+    # it carries into every higher speed stays small. Past it, ffmpeg is both
+    # exact and cheaper.
+    max_native_rate = 1.5
+
     def __init__(self) -> None:
         self._loaded: dict[str, object] = {}
         self._lock = threading.Lock()

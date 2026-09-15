@@ -21,7 +21,7 @@ too, but see the warning below before you trust it.
 
 - **Reads aloud** in natural voices — 47 English online, 38 offline.
 - **Highlights each word** as it speaks, and scrolls to follow.
-- **Speeds up** to 3×, or down to 0.75×.
+- **Speeds up** to 5×, or down to 0.75×.
 - **Skips the junk** — headers, footers, sidebars, citations, reference lists.
 - **Highlight and annotate** in four colours, with margin notes. Saved as real
   PDF annotations, so Okular, Acrobat and Zotero see them too.

@@ -139,7 +139,7 @@ class ExportWorker(QObject):
         pool = ThreadPoolExecutor(max_workers=CONVERT_WORKERS, thread_name_prefix="mimick-export")
         try:
             futures = [
-                pool.submit(self._engine.synthesize, sentence.text, self._voice, self._rate)
+                pool.submit(self._engine.render, sentence.text, self._voice, self._rate)
                 for sentence in self._sentences
             ]
             with handle:

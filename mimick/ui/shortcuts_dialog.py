@@ -24,7 +24,7 @@ GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
         ("Double-click", "Select the whole sentence"),
         ("Right-click", "Start reading from that point, whichever mode you are in"),
         ("Ctrl+A", "Select every word on the page"),
-        ("Ctrl+C", "Copy the selected text"),
+        ("Ctrl+C", "Copy the selected text, or the highlight you have clicked"),
         ("Esc", "Clear the selection"),
     ]),
     ("Moving around", [
@@ -38,8 +38,11 @@ GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
         ("Ctrl+H", "Highlight the selected text"),
         ("Ctrl+M", "Highlight it and write a note"),
         ("Ctrl+J / Ctrl+K", "Jump to the next or previous note"),
+        ("Ctrl+Z", "Take back the last highlight or note"),
+        ("Ctrl+Shift+Z", "Put it back again"),
         ("Click a highlight", "Select it, on the page or in the margin"),
         ("Double-click it", "Edit the note, its heading or its colour"),
+        ("Right-click it", "Copy the passage, the note, or both"),
     ]),
     ("Files", [
         ("Ctrl+O", "Open a PDF"),

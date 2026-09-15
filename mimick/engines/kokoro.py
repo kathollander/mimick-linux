@@ -74,6 +74,10 @@ class KokoroEngine(Engine):
     name = "Kokoro (offline)"
     needs_network = False
 
+    # The model clamps its own speed at 3.0, but only the bottom of that range
+    # has been heard. Anything above is left to ffmpeg -- see Engine.render.
+    max_native_rate = 2.0
+
     def __init__(self) -> None:
         self._model = None
 

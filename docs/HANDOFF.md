@@ -2,7 +2,8 @@
 
 Everything a fresh session needs to pick Mimick up. Written 11 September 2026,
 the evening the project was built; updated 12 September, the day it was
-published and v0.2.0 released.
+published and v0.2.0 released, and again on 15 September after four changes to
+the reader itself.
 
 ## What Mimick is
 
@@ -59,6 +60,7 @@ QT_QPA_PLATFORM=offscreen MIMICK_CONFIG_DIR=/tmp/mimick-test \
 | `mimick/export.py` | MP3 conversion; streams PCM to a temp file, two workers. |
 | `mimick/annotations.py` | Highlights and notes as real PDF annotations. Also where a document's notes get written, and how. |
 | `mimick/ui/page_view.py` | The canvas: its own scroll area, page cache, notes panel, plan overlay. The panel scrolls separately from the page. |
+| `mimick/ui/markup_bar.py` | Highlight and Add note, and the four places they can be dragged to. |
 | `mimick/ui/main_window.py` | Everything else. The big one. |
 | `tools/` | `check_shortcuts.py`, `check_reading.py`. Run both after changes. |
 
@@ -195,6 +197,25 @@ layout, keep the cut's order. The same rule is why `_pages_on_screen` exists in
 which is right for pixmaps and wrong for anything that must match what the
 reader is looking at.
 
+**13. No voice engine speaks much faster than 2×, and none of them say so.**
+Edge's service clamps `prosody rate` at +100%: ask for 2×, 3× or 6× and the
+audio that comes back is byte-identical. Kokoro clamps its `speed` outright.
+Piper's `length_scale` compresses phonemes but not the pauses between them, so
+6× asked for yields about 2.6× heard. None of this raises anything — the speed
+box said 3× and gave 2× for a year. Anything above `Engine.max_native_rate` is
+now taken out of the rendered audio by ffmpeg `atempo` in `Engine.render`, with
+`Clip.marks` divided by the same factor. **Call `render`, never `synthesize`**,
+or that sentence comes out at the engine's own pace while every other sentence
+is at the reader's.
+
+**14. A widget cannot be taken out of a layout by re-parenting it.** The markup
+bar moves between four hosts, and `setParent` alone leaves the old layout still
+holding it: it reappears where it was the next time anything re-lays out.
+`_place_markup_bar` calls `removeWidget` on every host it might be in first.
+The matching trap is on the other side — a `QLayout` cannot be swapped while it
+is installed, so `MarkupBar._rebuild_layout` hands the old one to a throwaway
+`QWidget` to be destroyed with it rather than emptying it in place.
+
 ## Windows
 
 Added on 12 September 2026 and **not yet run on a real Windows machine** — it
@@ -283,7 +304,7 @@ Paths below are Linux; on Windows `~/.config/mimick` is `%APPDATA%\Mimick` and
 ## Where it stands
 
 Working and tested: reading with online and offline voices, word-sync
-highlighting, speed to 3×, selection reading, highlights and margin notes saved
+highlighting, speed to 5×, selection reading, highlights and margin notes saved
 as PDF annotations, MP3 conversion with estimates and working cancellation,
 layout analysis with a visible editable reading order, citation skipping, and
 the reading cleanup — reference lists, masthead and declarations left out,
@@ -311,6 +332,34 @@ safe save has to take.
 by exporting the tag to a clean folder and running it from there rather than
 from the working tree. The release notes draft has been deleted, as planned.
 
+**Done on 14–15 September, unreleased.** Four pieces of work on the reader
+itself, all driven by using it rather than reading it:
+
+- **Speed goes to 5×, and now means it.** The old 3× was a fiction — see trap
+  13. Anything above an engine's honest ceiling is taken out of the rendered
+  audio by ffmpeg, in `Engine.render`.
+- **`Ctrl`+`Z` takes back a highlight or a note**, `Ctrl`+`Shift`+`Z` puts it
+  back. Steps find their annotation by PDF object, then by exact word span,
+  then by position — in that order, because undoing a deletion builds a new
+  annotation, and because two highlights can overlap.
+- **Highlight and Add note are one movable strip** (`mimick/ui/markup_bar.py`),
+  which can sit in the notes panel, across the top or bottom, or loose over the
+  page. This closed a real defect: Add note used to live inside the notes panel
+  header, so switching the notes column off took away the only way to write one.
+- **A highlight can be copied, read and removed directly.** `Ctrl`+`C` with
+  nothing selected copies the picked-out highlight and its note; right-click on
+  the page or on a card offers copy, read and delete; and a picked-out highlight
+  carries a small × in the page margin that removes it in one click.
+
+**What has not been checked by hand.** Everything above was tested offscreen,
+with synthesized mouse events for the dragging and the ×. **Nobody has yet
+dragged the markup bar with a real mouse, or listened to 5×.** The two
+questions worth answering first: is the top of the speed range actually
+comprehensible, and does the word highlight still keep up with the voice at
+4–5×? Neither is visible to a check tool. There are five throwaway test
+scripts for this work, none of them kept — `tools/` still holds only the two
+check tools, and anything worth keeping should be written up there properly.
+
 **Windows remains the single biggest untested surface in the project** — see
 the Windows section above; nothing in it has met the platform it targets. The
 release went out anyway, because the reading and notes fixes mattered to the
@@ -318,10 +367,12 @@ people already using it on Linux, and the README now says so plainly in the
 heads-up box at the top rather than burying it in known issues.
 
 Not done: see [`ROADMAP.md`](ROADMAP.md). The release checklist there is the
-next thing to work through. The two most valuable tasks are **trying it on more
-real documents** — `tools/check_reading.py` makes that quick — and **hearing
-back from the first Windows run**, which is the only part of the install path
-still unverified on either platform.
+next thing to work through. The three most valuable tasks are **using the four
+changes above on a real reading**, which is the only way the speed range and
+the markup bar get judged; **trying it on more real documents** —
+`tools/check_reading.py` makes that quick — and **hearing back from the first
+Windows run**, which is the only part of the install path still unverified on
+either platform.
 
 Published at **<https://github.com/kathollander/mimick>** (public, AGPL-3.0),
 pushed on 12 September 2026. Commit as `kathollander <kathoacct@pm.me>`, which

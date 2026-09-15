@@ -100,6 +100,25 @@ QFrame#ControlBar {{
     border-top: 1px solid {BORDER};
 }}
 
+/* The movable Highlight / Add note strip. Clipped into the notes panel it is
+   part of the panel and wants no edges of its own; anywhere else it is an
+   object sitting on top of something, and needs them. */
+QFrame#MarkupBar {{
+    background: {PANEL};
+    border: 1px solid {BORDER};
+    border-radius: 10px;
+}}
+QFrame#MarkupBar[home="panel"] {{
+    background: transparent;
+    border: none;
+}}
+QFrame#MarkupBar[home="top"], QFrame#MarkupBar[home="bottom"] {{
+    border-radius: 0;
+    border-left: none;
+    border-right: none;
+}}
+QFrame#MarkupBar QLabel {{ color: {TEXT_DIM}; font-size: 15px; }}
+
 QScrollArea {{ border: none; background: {BACKDROP}; }}
 
 QPushButton, QToolButton {{

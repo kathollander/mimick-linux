@@ -78,6 +78,43 @@ Written on Linux and **not yet run on Windows** — see the release checklist.
 Released 12 September 2026:
 <https://github.com/kathollander/mimick/releases/tag/v0.2.0>
 
+## In hand — not released yet
+
+**Speed past 3×, and the 3× that was not.** Neither voice engine will speak
+much faster than twice normal: Edge's service clamps its `prosody rate` at
++100% and returns byte-identical audio for 2×, 3× and 6× alike, so the 2.5×
+and 3× the speed box offered had been giving 2× all along. The rate is now
+split — as much as the engine will honestly do, the rest taken out of the
+rendered audio by ffmpeg's `atempo`, which keeps the pitch where it was and
+costs about 70 ms a sentence. Word timings are divided by the same factor, so
+the highlight stays locked to the voice. The list goes to 5×, and the prefetch
+queue is deeper because at that speed a sentence is gone before the next one
+has been fetched. `Engine.render` is the one place this happens, for the same
+reason the text pipeline has one path.
+
+**Ctrl+Z for highlights and notes.** Adding a highlight, editing a note and
+deleting one are all undoable, with Ctrl+Shift+Z to put them back. Edits are
+recorded by word index rather than by object, because undoing a deletion has to
+build a new annotation with a new xref. Nothing else is undoable, deliberately.
+
+**Highlight and Add note come unclipped.** They are one strip now, and it can
+be dragged to the notes panel, the top or bottom of the reading area, or left
+loose over the page. This fixes a real defect as well as adding the arrangement:
+Add note used to live inside the notes panel header, which is hand-positioned
+inside the page view, so turning the notes column off took the only way of
+writing a note with it. See `mimick/ui/markup_bar.py`, including why Qt's own
+QToolBar could not do this.
+
+**Copying a highlight or a note, and removing one.** Copy only ever worked on
+a drag selection, and clicking a highlight deliberately *clears* the selection,
+so Ctrl+C on a highlight did nothing at all. Right-clicking the notes column
+did nothing either -- the handler said so in as many words. Now: Ctrl+C with no
+selection copies the picked-out highlight and its note; right-click, on the
+page or on the card, offers to copy the passage, the note or both, read the
+passage, or delete it; and a picked-out highlight carries a small x -- in the
+page's margin, level with its last line, so it never sits on a word -- that
+removes it in one click. Every removal is undoable.
+
 ## Testing notes
 
 `MIMICK_CONFIG_DIR` and `MIMICK_CACHE_DIR` redirect settings and downloads to
@@ -224,37 +261,16 @@ connection; if estimates drift, time a known document and adjust.
 
 ## Planned — "Anywhere mode"
 
-*Recorded here so it isn't lost; not started.*
+Reading selected text from any application with a hotkey, not just PDFs open
+in Mimick. Still not started, but now designed: see
+[`ANYWHERE-MODE.md`](ANYWHERE-MODE.md) for the reuse surface, the two
+verified facts about the hotkey, why there can be no true overlay on
+GNOME/Wayland, and the build order.
 
-A background service that reads **any** selected text, in any application — a
-web page in Firefox, a PDF already open in Okular, a paragraph in LibreOffice,
-a message in a chat window. Select the text, press a hotkey, hear it.
-
-**How it would work**
-
-1. A small tray application starts with the session.
-2. A global hotkey (say `Super`+`R`) registered through GNOME's custom
-   keybindings, which is the approach that works under Wayland.
-3. On the hotkey, read the primary selection with `wl-paste --primary`
-   (Wayland) or `xclip -o` (X11).
-4. Feed that text into the same player Mimick already uses — the engines,
-   prefetch queue and transport all get reused unchanged.
-5. Tray icon offers pause, stop and speed.
-
-**Why it's worth doing:** it covers every case the PDF reader doesn't — EPUBs,
-websites, emails, anything on screen. It's the piece that makes the whole thing
-feel like a system service rather than a single app.
-
-**Known difficulties**
-
-- Wayland deliberately prevents applications from grabbing global hotkeys, so
-  the binding has to be registered with the desktop environment instead. That
-  means GNOME-specific setup, with a different path for KDE.
-- The primary selection behaves inconsistently across toolkits; Electron apps
-  are the usual offenders.
-- Reading a whole page *without* a selection would need AT-SPI, the
-  accessibility layer screen readers use. It's fragile on Wayland and broken in
-  many Electron apps, so selection-based reading should stay the primary path.
+The short version: `Player` never knew what a PDF was, so the engines,
+prefetch queue and transport all reuse unchanged. The new code is one small
+text-to-`Sentence` adapter plus a reading window that does the word
+highlighting, since Mimick cannot highlight inside someone else's browser.
 
 ## Further out
 

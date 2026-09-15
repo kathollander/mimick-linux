@@ -32,6 +32,11 @@ class EdgeEngine(Engine):
     name = "Edge Neural (online)"
     needs_network = True
 
+    # Measured, not guessed: the service clamps prosody rate at +100% and
+    # returns byte-identical audio for 2x, 3x and 6x. Anything above this is
+    # taken out of the rendered audio instead -- see Engine.render.
+    max_native_rate = 2.0
+
     def __init__(self) -> None:
         self._voices: list[Voice] | None = None
 

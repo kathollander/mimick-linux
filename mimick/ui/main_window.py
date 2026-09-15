@@ -6,9 +6,9 @@ from pathlib import Path
 
 import sounddevice as sd
 
-from PySide6.QtCore import (QCoreApplication, QEvent, QEventLoop, Qt, QThread,
+from PySide6.QtCore import (QCoreApplication, QEvent, QEventLoop, QPoint, Qt, QThread,
                             QTime, QTimer, Signal, Slot)
-from PySide6.QtGui import QAction, QCursor, QKeySequence, QShortcut
+from PySide6.QtGui import QAction, QActionGroup, QCursor, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QComboBox, QDialog, QFileDialog, QFrame, QHBoxLayout, QLabel, QMainWindow,
     QApplication, QMenu, QMessageBox, QProgressDialog, QPushButton, QSizePolicy,
@@ -32,9 +32,10 @@ from .note_dialog import NoteDialog, NoteStyleDialog, _same_colour, colour_swatc
 from .voices_dialog import OfflineVoicesDialog
 from ..player import Player
 from . import theme
+from .markup_bar import HOMES, MarkupBar
 from .page_view import PageView
 
-SPEEDS = [0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0]
+SPEEDS = [0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0]
 # How long after the last change the notes are written. Long enough that
 # highlighting three sentences in a row is one save, short enough that closing
 # the lid straight afterwards does not lose anything.
@@ -43,6 +44,10 @@ AUTOSAVE_DELAY_MS = 1200
 # in the corner is actually readable rather than a flicker.
 CLOSING_PAUSE_MS = 900
 PREVIEW_TEXT = "This is how I sound when I read your documents aloud."
+# How many highlights and notes back Ctrl+Z reaches. Deep enough to cover a
+# misfire noticed a few passages later, shallow enough that the stack is not
+# quietly holding a session's worth of dead annotations.
+UNDO_DEPTH = 50
 
 # How a click on the page behaves.
 MODE_CLICK = "click"        # click a sentence to read from there
@@ -97,7 +102,7 @@ class PreviewWorker(QThread):
 
     def run(self) -> None:
         try:
-            self.ready.emit(self._engine.synthesize(PREVIEW_TEXT, self._voice, self._rate))
+            self.ready.emit(self._engine.render(PREVIEW_TEXT, self._voice, self._rate))
         except EngineError as exc:
             self.failed.emit(str(exc))
         except Exception as exc:
@@ -125,6 +130,12 @@ class MainWindow(QMainWindow):
         self._buffering = False
         self._resume_after_voices: int | None = None
         self.store: AnnotationStore | None = None
+        # Ctrl+Z. Each entry is (said when undone, said when redone, undo,
+        # redo); both halves find the annotation they act on by word index
+        # rather than holding on to the object, because undoing a deletion has
+        # to build a new one.
+        self._undo_stack: list[tuple[str, str, object, object]] = []
+        self._redo_stack: list[tuple[str, str, object, object]] = []
         self._click_mode = self.settings.get("click_mode", MODE_CLICK)
         # Where this document's notes are written, and a debounce so a burst of
         # highlighting is one save rather than twenty.
@@ -160,8 +171,11 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
         layout.addWidget(self._build_toolbar())
-        self.annotation_bar = self._build_annotation_bar()
-        layout.addWidget(self.annotation_bar)
+
+        # Slots the markup bar can dock into. They stay empty and hidden until
+        # it is dragged to one of them.
+        self.markup_top = self._markup_slot()
+        layout.addWidget(self.markup_top)
 
         # The view is its own scroll area, so it goes straight into the layout.
         self.page_view = PageView()
@@ -172,9 +186,17 @@ class MainWindow(QMainWindow):
         self.page_view.annotation_activated.connect(self.edit_note)
         self.page_view.region_clicked.connect(self._on_region_clicked)
         self.page_view.context_requested.connect(self._on_page_context_menu)
+        self.page_view.card_context_requested.connect(self._on_card_context_menu)
+        self.page_view.annotation_remove_requested.connect(self.delete_annotation)
         layout.addWidget(self.page_view, 1)
 
+        self.markup_bottom = self._markup_slot()
+        layout.addWidget(self.markup_bottom)
+
         layout.addWidget(self._build_controls())
+        # The bar owns the Highlight and Add note buttons, so it has to exist
+        # before the notes panel, which is one of the places it can live.
+        self._build_markup_bar()
         self._build_notes_panel()
         self.setCentralWidget(central)
         self._build_menus()
@@ -247,22 +269,28 @@ class MainWindow(QMainWindow):
         outer.addWidget(right, 1)
         return bar
 
-    def _build_annotation_bar(self) -> QWidget:
-        """The highlighting strip, shown under the top bar when turned on.
+    @staticmethod
+    def _markup_slot() -> QWidget:
+        """An empty strip the markup bar can be dropped into, top or bottom."""
+        slot = QFrame()
+        slot.setObjectName("ControlBar")
+        box = QVBoxLayout(slot)
+        box.setContentsMargins(0, 0, 0, 0)
+        box.setSpacing(0)
+        slot.hide()
+        return slot
 
-        Note controls live in the notes panel itself; this bar is only about
-        marking up the page.
+    def _build_markup_bar(self) -> None:
+        """Highlight and Add note, in the strip that can be moved about.
+
+        Both buttons used to be fixed in place, and Add note was fixed inside
+        the notes panel, so it could only be reached by giving up a quarter of
+        the window to the column of cards. They travel together now -- see
+        ``markup_bar.py`` for the four places they can travel to.
         """
-        bar = QFrame()
-        bar.setObjectName("ControlBar")
-        row = QHBoxLayout(bar)
-        row.setContentsMargins(12, 6, 12, 6)
-        row.setSpacing(8)
-
         self.highlight_button = QPushButton("Highlight")
         self.highlight_button.setToolTip("Highlight the selected text  (Ctrl+H)")
         self.highlight_button.clicked.connect(self.highlight_selection)
-        row.addWidget(self.highlight_button)
 
         self.colour_button = QPushButton()
         self.colour_button.setFixedWidth(48)
@@ -275,10 +303,27 @@ class MainWindow(QMainWindow):
             colour_menu.addAction(action)
         self.colour_button.setMenu(colour_menu)
         self._refresh_colour_button()
-        row.addWidget(self.colour_button)
 
-        row.addStretch(1)
-        return bar
+        # Highlight and its colour are one control wherever the bar is, so they
+        # travel as one widget rather than as two the layout has to keep together.
+        self.highlight_group = QWidget()
+        pair = QHBoxLayout(self.highlight_group)
+        pair.setContentsMargins(0, 0, 0, 0)
+        pair.setSpacing(4)
+        pair.addWidget(self.highlight_button, 1)
+        pair.addWidget(self.colour_button)
+
+        self.add_note_button = QPushButton("+  Add note")
+        self.add_note_button.setToolTip("Highlight the selected text and write a note  (Ctrl+M)")
+        self.add_note_button.clicked.connect(self.note_selection)
+
+        self.markup_bar = MarkupBar(self.page_view.viewport())
+        # Add note first, Highlight under it: writing is what the panel is for.
+        self.markup_bar.set_buttons([self.add_note_button, self.highlight_group])
+        self.markup_bar.set_stage(self.page_view.viewport())
+        self.markup_bar.home_changed.connect(self._on_markup_moved)
+        self.markup_bar.detached.connect(
+            lambda point: self._place_markup_bar("float", point))
 
     def _build_notes_panel(self) -> None:
         """The controls docked at the top and bottom of the notes panel."""
@@ -303,15 +348,19 @@ class MainWindow(QMainWindow):
         self.filter_written.setToolTip("Show the ones you wrote a note on")
         stack.addLayout(filters)
 
+        # Where the markup bar sits when it is clipped into the panel. It is
+        # put in and taken out by _place_markup_bar, so this stays an empty
+        # slot the rest of the time.
+        self.markup_slot = QVBoxLayout()
+        self.markup_slot.setContentsMargins(0, 0, 0, 0)
+        self.markup_slot.setSpacing(0)
+        stack.addLayout(self.markup_slot)
+
         top = QHBoxLayout()
         top.setSpacing(6)
         stack.addLayout(top)
 
-        self.add_note_button = QPushButton("+  Add note")
-        self.add_note_button.setToolTip("Highlight the selected text and write a note  (Ctrl+M)")
-        self.add_note_button.clicked.connect(self.note_selection)
-        top.addWidget(self.add_note_button, 1)
-
+        top.addStretch(1)
         self.prev_note_button = QPushButton("\u2039")
         self.prev_note_button.setFixedWidth(30)
         self.prev_note_button.setToolTip("Previous note  (Ctrl+K)")
@@ -465,10 +514,28 @@ class MainWindow(QMainWindow):
         file_menu.addAction(act_quit)
 
         display_menu = self.menuBar().addMenu("&Display")
-        self.act_annotation_bar = QAction("&Highlighting toolbar", self, checkable=True)
+        self.act_annotation_bar = QAction("&Highlight and note buttons", self, checkable=True)
         self.act_annotation_bar.setShortcut(QKeySequence("Ctrl+T"))
-        self.act_annotation_bar.triggered.connect(self._toggle_annotation_bar)
+        self.act_annotation_bar.setToolTip("The Highlight and Add note buttons, "
+                                           "wherever you have put them")
+        self.act_annotation_bar.triggered.connect(self._toggle_markup_bar)
         display_menu.addAction(self.act_annotation_bar)
+
+        # Where those buttons sit. Dragging them does the same thing; this is
+        # here so the arrangement can be found without knowing to drag.
+        where_menu = display_menu.addMenu("Put those buttons")
+        self._markup_home_actions = {}
+        labels = {"panel": "In the &notes panel", "top": "Across the &top",
+                  "bottom": "Across the &bottom", "float": "&Loose over the page"}
+        group = QActionGroup(self)
+        group.setExclusive(True)
+        for name in HOMES:
+            action = QAction(labels[name], self, checkable=True)
+            action.triggered.connect(
+                lambda _checked=False, n=name: self._place_markup_bar(n, announce=True))
+            group.addAction(action)
+            where_menu.addAction(action)
+            self._markup_home_actions[action] = name
 
         self.act_filter_quotes = QAction("Show &highlights in the panel", self, checkable=True)
         self.act_filter_quotes.setChecked(True)
@@ -551,8 +618,9 @@ class MainWindow(QMainWindow):
         display_menu.addAction(act_reset_zoom)
 
         self.notes_menu = notes_menu = self.menuBar().addMenu("&Notes")
-        self.act_copy = QAction("&Copy selection", self)
-        self.act_copy.setToolTip("Put the selected words on the clipboard")
+        self.act_copy = QAction("&Copy", self)
+        self.act_copy.setToolTip("Copy the selected words \u2014 or, with a "
+                                 "highlight picked out, that passage and its note")
         self.act_copy.setShortcut(QKeySequence.StandardKey.Copy)
         self.act_copy.triggered.connect(self.copy_selection)
         notes_menu.addAction(self.act_copy)
@@ -578,6 +646,20 @@ class MainWindow(QMainWindow):
         act_prev_note.setShortcut(QKeySequence("Ctrl+K"))
         act_prev_note.triggered.connect(lambda: self._step_note(-1))
         notes_menu.addAction(act_prev_note)
+        notes_menu.addSeparator()
+
+        notes_menu.addSeparator()
+
+        self.act_undo = QAction("&Undo the last highlight or note", self)
+        self.act_undo.setShortcut(QKeySequence("Ctrl+Z"))
+        self.act_undo.triggered.connect(self.undo_annotation)
+        notes_menu.addAction(self.act_undo)
+
+        self.act_redo = QAction("&Redo it", self)
+        self.act_redo.setShortcut(QKeySequence("Ctrl+Shift+Z"))
+        self.act_redo.triggered.connect(self.redo_annotation)
+        notes_menu.addAction(self.act_redo)
+
         notes_menu.addSeparator()
 
         act_note_style = QAction("Note &appearance\u2026", self)
@@ -624,9 +706,9 @@ class MainWindow(QMainWindow):
 
     def _apply_view_settings(self) -> None:
         """Restore the display choices from last time."""
-        show_bar = bool(self.settings.get("show_annotation_bar", True))
-        self.annotation_bar.setVisible(show_bar)
-        self.act_annotation_bar.setChecked(show_bar)
+        self._markup_shown = bool(self.settings.get("show_annotation_bar", True))
+        self.act_annotation_bar.setChecked(self._markup_shown)
+        self._place_markup_bar(str(self.settings.get("markup_home", "panel")))
 
         self._set_card_filter(
             quotes=bool(self.settings.get("panel_shows_quotes", True)),
@@ -718,6 +800,9 @@ class MainWindow(QMainWindow):
         # nothing can dereference a document that has already been closed.
         previous = self.document
         self.document = document
+        # Word indices only mean anything within one document, and the
+        # annotations the stack refers to belong to the one being closed.
+        self._clear_undo()
         try:
             self.store = AnnotationStore(document, self._author())
         except Exception:
@@ -1043,6 +1128,29 @@ class MainWindow(QMainWindow):
         self._set_status(f"Reading your selection \u2014 {words} words")
         self.player.play(0)
 
+    def read_annotation(self, item) -> None:
+        """Read a highlighted passage aloud, then go quiet.
+
+        The same path as reading a selection -- ``sentences_from_range`` is
+        where citation skipping and the cleanup are applied, so a highlight read
+        this way sounds like the same passage read any other way.
+        """
+        if self.document is None or item is None or item.first_word < 0:
+            return
+        if not self._current_voice():
+            self._warn("No voice selected", "Mimick has no voice to read with yet.")
+            return
+        pieces = self.document.sentences_from_range(item.first_word, item.last_word)
+        if not pieces:
+            self._set_status("That highlight has no readable text")
+            return
+        self.stop_all_audio()
+        self._reading_selection = True
+        self._active_sentences = pieces
+        self.player.configure(pieces, self.engine, self._current_voice(), self._current_speed())
+        self._set_status("Reading the highlighted passage")
+        self.player.play(0)
+
     def _play_document(self) -> None:
         """Read the whole document, continuing from the remembered position."""
         if self.document is None:
@@ -1074,7 +1182,7 @@ class MainWindow(QMainWindow):
 
     def _on_selection_changed(self, first: int, last: int) -> None:
         has_selection = first >= 0
-        self.act_copy.setEnabled(has_selection and self.document is not None)
+        self._refresh_copy_action()
         if has_selection and self.document is not None:
             count = last - first + 1
             self._set_status(f"{count} words selected \u2014 press Enter to read them")
@@ -1241,8 +1349,9 @@ class MainWindow(QMainWindow):
                 note = menu.addAction("Highlight and write a note\u2026")
                 note.triggered.connect(self.note_selection)
         elif annotation is not None and self.store is not None:
-            edit = menu.addAction("Edit this note\u2026")
-            edit.triggered.connect(lambda: self.edit_note(annotation))
+            # Right-clicking a highlight offers the same things as right-clicking
+            # its card in the panel, so the two cannot say different things.
+            self.add_annotation_actions(menu, annotation)
         else:
             nothing = menu.addAction("Select some text to copy or highlight it")
             nothing.setEnabled(False)
@@ -1607,15 +1716,96 @@ class MainWindow(QMainWindow):
         if was_playing:
             self.player.play(0)
 
+    # -- where the markup bar lives ----------------------------------------
+
+    def notes_gutter_rect(self):
+        """The notes column, for the markup bar to aim a drop at."""
+        return self.page_view.notes_gutter_rect()
+
+    def _place_markup_bar(self, home: str, point: QPoint | None = None,
+                          announce: bool = False) -> None:
+        """Move the bar to one of its four homes and remember it was there."""
+        if home == "panel" and not self.page_view.notes_visible:
+            # The panel is the one home that can be taken away underneath it.
+            home = "top"
+
+        # Out of wherever it is. Taking it out of a layout means taking it out
+        # by hand: a layout will not let go of a widget just because the widget
+        # was re-parented.
+        for box in (self.markup_slot,
+                    self.markup_top.layout(), self.markup_bottom.layout()):
+            box.removeWidget(self.markup_bar)
+        self.markup_bar.set_home(home)
+
+        if home == "panel":
+            self.markup_bar.setParent(self.notes_header)
+            self.markup_slot.addWidget(self.markup_bar)
+        elif home in ("top", "bottom"):
+            slot = self.markup_top if home == "top" else self.markup_bottom
+            slot.layout().addWidget(self.markup_bar)
+        else:
+            self.markup_bar.setParent(self.page_view.viewport())
+            self.markup_bar.adjustSize()
+            self.markup_bar.move(self._markup_float_point(point))
+            self.markup_bar.raise_()
+
+        self.markup_top.setVisible(home == "top" and self._markup_shown)
+        self.markup_bottom.setVisible(home == "bottom" and self._markup_shown)
+        self.markup_bar.setVisible(self._markup_shown)
+        self.page_view.refresh_panel_widgets()
+
+        self.settings.set("markup_home", home)
+        if home == "float":
+            spot = self.markup_bar.pos()
+            self.settings.set("markup_point", [spot.x(), spot.y()])
+        for action, name in self._markup_home_actions.items():
+            action.setChecked(name == home)
+        if announce:
+            self._set_status({
+                "panel": "Highlight and Add note are in the notes panel",
+                "top": "Highlight and Add note are across the top",
+                "bottom": "Highlight and Add note are across the bottom",
+                "float": "Highlight and Add note are loose over the page \u2014 "
+                         "drag the handle to put them back",
+            }[home])
+
+    def _markup_float_point(self, point: QPoint | None) -> QPoint:
+        """Keep a floating bar on screen, wherever it was left."""
+        if point is None or point.isNull():
+            saved = self.settings.get("markup_point") or []
+            point = QPoint(*saved[:2]) if len(saved) == 2 else QPoint(24, 24)
+        view = self.page_view.viewport()
+        size = self.markup_bar.sizeHint()
+        x = max(0, min(point.x(), max(0, view.width() - size.width())))
+        y = max(0, min(point.y(), max(0, view.height() - size.height())))
+        return QPoint(x, y)
+
+    def _on_markup_moved(self, home: str, point: QPoint) -> None:
+        self._place_markup_bar(home, point, announce=True)
+
+    def _toggle_markup_bar(self, checked: bool) -> None:
+        """Show or hide the Highlight and Add note buttons altogether."""
+        self._markup_shown = checked
+        self.settings.set("show_annotation_bar", checked)
+        self._place_markup_bar(self.markup_bar.home)
+        self._set_status("Highlight and Add note shown" if checked
+                         else "Highlight and Add note hidden \u2014 Ctrl+H and "
+                              "Ctrl+M still work")
+
     def _toggle_notes(self, checked: bool) -> None:
         """Show or hide the notes column beside the page."""
         self.page_view.set_notes_visible(checked)
         self.settings.set("show_notes", checked)
+        # Putting the column away must not take Add note away with it -- that
+        # was the old behaviour, and the reason the markup bar exists.
+        if not checked and self.markup_bar.home == "panel":
+            self._place_markup_bar("top")
+            self._set_status("Notes panel hidden \u2014 Highlight and Add note "
+                             "moved to the top")
+            return
         self._set_status("Notes panel shown" if checked else "Notes panel hidden")
 
-    def _toggle_annotation_bar(self, checked: bool) -> None:
-        self.annotation_bar.setVisible(checked)
-        self.settings.set("show_annotation_bar", checked)
+
 
     def _author(self) -> str:
         """The name saved with each highlight, which other readers display."""
@@ -1649,9 +1839,21 @@ class MainWindow(QMainWindow):
         """Put the selected words on the clipboard, as they appear on the page.
 
         The words as written, not as spoken -- see Document.selection_text.
+
+        With nothing dragged over, this copies whatever highlight or note card
+        is currently picked out instead. Clicking a highlight deliberately
+        clears the text selection -- otherwise clicking one would look like
+        selecting its words -- so without this fallback Ctrl+C on a highlight
+        did nothing at all, which is not what a reader means by pressing it.
         """
         chosen = self.page_view.selection
-        if self.document is None or chosen is None:
+        if self.document is None:
+            return
+        if chosen is None:
+            active = self.page_view.active_note
+            if active is not None:
+                self.copy_annotation(active)
+                return
             self._set_status("Select some text first \u2014 drag across it, or press Ctrl+A")
             return
         text = self.document.selection_text(*chosen)
@@ -1660,6 +1862,246 @@ class MainWindow(QMainWindow):
         QApplication.clipboard().setText(text)
         words = chosen[1] - chosen[0] + 1
         self._set_status(f"Copied {words} word{'s' if words != 1 else ''}")
+
+    def annotation_text(self, item, part: str = "both") -> str:
+        """A highlight as text: its passage, its note, or both.
+
+        The passage is rebuilt from the document rather than read off the
+        annotation, so a word broken across a line comes back whole -- the same
+        reason ``copy_selection`` goes through ``Document.selection_text``.
+        """
+        passage = ""
+        if self.document is not None and item.first_word >= 0:
+            passage = self.document.selection_text(item.first_word, item.last_word)
+        passage = passage or " ".join((item.text or "").split())
+        note = "\n".join(bit for bit in ((item.heading or "").strip(),
+                                         (item.note or "").strip()) if bit)
+        if part == "passage":
+            return passage
+        if part == "note":
+            return note
+        if passage and note:
+            return f"\u201c{passage}\u201d\n\n{note}"
+        return passage or note
+
+    def copy_annotation(self, item, part: str = "both") -> None:
+        """Put a highlight, its note, or both on the clipboard."""
+        if item is None:
+            return
+        text = self.annotation_text(item, part)
+        if not text:
+            self._set_status("There is nothing written on that one to copy")
+            return
+        QApplication.clipboard().setText(text)
+        self._set_status({
+            "passage": "Copied the highlighted passage",
+            "note": "Copied the note",
+            "both": "Copied the passage and the note" if (item.note or item.heading)
+                    else "Copied the highlighted passage",
+        }[part])
+
+    def _on_card_context_menu(self, item) -> None:
+        """Right-click on a note card in the panel."""
+        menu = self.build_annotation_menu(item)
+        if menu is not None:
+            menu.exec(QCursor.pos())
+
+    def build_annotation_menu(self, item):
+        """The menu for a highlight, wherever it was right-clicked.
+
+        Shared by the page and the notes panel so the two cannot drift, and
+        built separately from showing it so it can be checked without putting a
+        modal menu on screen -- the same arrangement as ``build_page_menu``.
+        """
+        if item is None or self.store is None:
+            return None
+        menu = QMenu(self)
+        self.add_annotation_actions(menu, item)
+        return menu
+
+    def add_annotation_actions(self, menu, item) -> None:
+        """Put the things you can do to a highlight onto an existing menu.
+
+        Takes the menu rather than returning one so the page's right-click menu
+        can carry these alongside its own entries. Actions belong to the menu
+        that created them, so they cannot simply be lifted from one to another.
+        """
+        written = bool((item.note or "").strip() or (item.heading or "").strip())
+
+        passage = menu.addAction("Copy the highlighted passage")
+        passage.triggered.connect(lambda: self.copy_annotation(item, "passage"))
+
+        if written:
+            note = menu.addAction("Copy the note")
+            note.triggered.connect(lambda: self.copy_annotation(item, "note"))
+            both = menu.addAction("Copy both")
+            both.triggered.connect(lambda: self.copy_annotation(item, "both"))
+
+        menu.addSeparator()
+        edit = menu.addAction("Edit this note\u2026" if written else "Write a note on this\u2026")
+        edit.triggered.connect(lambda: self.edit_note(item))
+
+        read = menu.addAction("Read this passage")
+        read.setEnabled(bool(self._current_voice()) and item.first_word >= 0)
+        read.triggered.connect(lambda: self.read_annotation(item))
+
+        menu.addSeparator()
+        delete = menu.addAction("Delete this highlight")
+        delete.triggered.connect(lambda: self.delete_annotation(item))
+
+    def delete_annotation(self, item) -> None:
+        """Remove a highlight, undoably."""
+        if self.store is None or item is None:
+            return
+        self._remember_deletion(item)
+        self.store.remove(item)
+        self.page_view.set_active_note(None)
+        self.page_view.refresh_annotations()
+        self._refresh_filter_labels()
+        self._update_enabled()
+        self._set_status("Highlight deleted \u2014 Ctrl+Z puts it back")
+
+    # -- undo --------------------------------------------------------------
+    #
+    # Only highlights and notes are undoable. Reading, zoom and the reading
+    # order are not: nothing is lost by redoing them by hand, whereas a
+    # highlight taken back by mistake is gone unless something remembers it.
+    #
+    # Nothing here holds on to an ``Annotation`` object. Undoing a deletion has
+    # to build a new one, with a new PDF xref, so anything remembered by object
+    # would be pointing at a corpse the second time round. Word indices are
+    # stable for the life of a document -- they survive a rebuild, which is
+    # what makes ``set_region_reads`` safe -- so they are what an edit records.
+
+    def _live_annotation(self, span: tuple[int, int], ref: list[int] | None = None):
+        """The annotation an undo step is about, whatever object it is now.
+
+        Three ways of finding it, in descending order of certainty:
+
+        1. **Its PDF object.** ``ref`` is a one-element list rather than a
+           number because undoing a deletion builds a *new* annotation with a
+           new xref, and the step has to follow it there.
+        2. **Its exact word span**, preferring the newest. ``store.at_word``
+           alone is not enough: it returns the first annotation merely
+           *containing* a word, so highlighting a passage inside something
+           already highlighted and pressing Ctrl+Z would take back the older
+           highlight instead of the one just made.
+        3. **Anything covering the first word**, which is what annotations made
+           in another reader -- with no span recorded -- fall back to.
+        """
+        if self.store is None:
+            return None
+        if ref:
+            for item in self.store.items:
+                if item.xref == ref[0]:
+                    return item
+        exact = [item for item in self.store.items
+                 if (item.first_word, item.last_word) == span]
+        if exact:
+            return max(exact, key=lambda item: item.xref)
+        return self.store.at_word(span[0])
+
+    def _push_undo(self, undone: str, redone: str, undo, redo) -> None:
+        self._undo_stack.append((undone, redone, undo, redo))
+        del self._undo_stack[:-UNDO_DEPTH]
+        # A fresh edit makes the redo branch unreachable, as everywhere else.
+        self._redo_stack.clear()
+        self._update_enabled()
+
+    def _clear_undo(self) -> None:
+        self._undo_stack.clear()
+        self._redo_stack.clear()
+
+    def _remember_highlight(self, item) -> None:
+        """Record a highlight's creation, so Ctrl+Z can take it back."""
+        span = (item.first_word, item.last_word)
+        colour, note, title = item.colour, item.note, item.title
+        ref = [item.xref]
+
+        def undo() -> None:
+            live = self._live_annotation(span, ref)
+            if live is not None:
+                self.store.remove(live)
+                self.page_view.set_active_note(None)
+
+        def redo() -> None:
+            restored = self.store.add(span[0], span[1], colour, note=note,
+                                      title=title, author=self._author())
+            if restored is not None:
+                ref[0] = restored.xref
+            self.page_view.set_active_note(restored)
+
+        thing = "Note" if note or title else "Highlight"
+        self._push_undo(f"{thing} removed", f"{thing} put back", undo, redo)
+
+    def _remember_note_change(self, item, before: tuple, after: tuple) -> None:
+        """Record an edit to a note's text, heading or colour."""
+        span = (item.first_word, item.last_word)
+        ref = [item.xref]
+
+        def apply(values: tuple) -> None:
+            note, title, colour = values
+            live = self._live_annotation(span, ref)
+            if live is None:
+                return
+            self.store.set_note(live, note, title)
+            if not _same_colour(colour, live.colour):
+                self.store.set_colour(live, colour)
+
+        self._push_undo("Note change undone", "Note change put back",
+                        lambda: apply(before), lambda: apply(after))
+
+    def _remember_deletion(self, item) -> None:
+        """Record a highlight's deletion. Call this before removing it."""
+        span = (item.first_word, item.last_word)
+        colour, note, title = item.colour, item.note, item.title
+        thing = "Note" if note or title else "Highlight"
+        ref = [item.xref]
+
+        def undo() -> None:
+            restored = self.store.add(span[0], span[1], colour, note=note,
+                                      title=title, author=self._author())
+            if restored is not None:
+                ref[0] = restored.xref
+            self.page_view.set_active_note(restored)
+
+        def redo() -> None:
+            live = self._live_annotation(span, ref)
+            if live is not None:
+                self.store.remove(live)
+                self.page_view.set_active_note(None)
+
+        self._push_undo(f"{thing} put back", f"{thing} deleted again", undo, redo)
+
+    def undo_annotation(self) -> None:
+        if not self._undo_stack:
+            self._set_status("Nothing to undo")
+            return
+        entry = self._undo_stack.pop()
+        entry[2]()
+        self._redo_stack.append(entry)
+        self._after_undo(entry[0])
+
+    def redo_annotation(self) -> None:
+        if not self._redo_stack:
+            self._set_status("Nothing to put back")
+            return
+        entry = self._redo_stack.pop()
+        entry[3]()
+        self._undo_stack.append(entry)
+        self._after_undo(entry[1])
+
+    def _after_undo(self, message: str) -> None:
+        """Everything an undo or a redo has to refresh, in one place.
+
+        ``_update_enabled`` is what notices the store is dirty and starts the
+        autosave, so an undo writes itself to the companion file exactly like
+        any other change. It must not be skipped.
+        """
+        self.page_view.refresh_annotations()
+        self._refresh_filter_labels()
+        self._update_enabled()
+        self._set_status(message)
 
     def highlight_selection(self, with_note: bool = False) -> None:
         """Highlight whatever is selected, optionally opening the note editor."""
@@ -1678,22 +2120,35 @@ class MainWindow(QMainWindow):
         self.page_view.set_active_note(item)
         self._update_enabled()
         if with_note:
-            self.edit_note(item)
+            # Highlighting and writing on it is one action to the reader, so it
+            # is one Ctrl+Z: the note editor does not record its own step, and
+            # what gets remembered is the finished note. If the editor was used
+            # to delete the highlight again, there is nothing left to remember.
+            self.edit_note(item, undoable=False)
+            written = self._live_annotation((item.first_word, item.last_word), [item.xref])
+            if written is not None:
+                self._remember_highlight(written)
         else:
+            self._remember_highlight(item)
             self._set_status(f"Highlighted \u2014 {len(self.store.items)} in this document")
 
     def note_selection(self) -> None:
         """Ctrl+M: highlight the selection and write a note on it at once."""
         if self.page_view.selection is None:
             # With nothing selected, edit the highlight that is currently active.
-            if self.page_view._active_note is not None:
-                self.edit_note(self.page_view._active_note)
+            if self.page_view.active_note is not None:
+                self.edit_note(self.page_view.active_note)
             else:
                 self._set_status("Select some text first, then add a note")
             return
         self.highlight_selection(with_note=True)
 
-    def edit_note(self, item) -> None:
+    def edit_note(self, item, undoable: bool = True) -> None:
+        """Open the note editor on a highlight.
+
+        ``undoable`` is False only when the caller is recording the whole
+        highlight-and-write as a single step -- see ``highlight_selection``.
+        """
         if self.store is None or item is None:
             return
         # Keep the originals so cancelling really does undo the live preview.
@@ -1714,27 +2169,45 @@ class MainWindow(QMainWindow):
         # Put the stored values back before writing, so the store sees a change.
         item.note, item.colour, item.title = original_note, original_colour, original_title
         if dialog.deleted:
+            if undoable:
+                # Recorded before the deletion, while there is still something
+                # to read the words and colour off.
+                self._remember_deletion(item)
             self.store.remove(item)
             self.page_view.set_active_note(None)
             self._set_status("Highlight deleted")
         else:
+            before = (item.note, item.title, item.colour)
             self.store.set_note(item, dialog.note, dialog.title)
             if not _same_colour(dialog.colour, item.colour):
                 self.store.set_colour(item, dialog.colour)
+            if undoable and before != (item.note, item.title, item.colour):
+                self._remember_note_change(
+                    item, before, (item.note, item.title, item.colour))
             self._set_status("Note saved")
         self.page_view.refresh_annotations()
         self._update_enabled()
 
     def _on_annotation_clicked(self, item) -> None:
+        # Picking out a highlight is what Ctrl+C acts on when nothing is
+        # dragged over, so the action has to come back to life here.
+        self._refresh_copy_action()
         preview = item.note or item.preview
-        self._set_status(f"\u201c{preview[:70]}\u201d \u2014 double-click to edit")
+        self._set_status(f"\u201c{preview[:70]}\u201d \u2014 Ctrl+C copies it, "
+                         f"double-click to edit")
+
+    def _refresh_copy_action(self) -> None:
+        """Copy is live when there is a selection *or* a highlight picked out."""
+        something = (self.page_view.selection is not None
+                     or self.page_view.active_note is not None)
+        self.act_copy.setEnabled(self.document is not None and something)
 
     def _step_note(self, delta: int) -> None:
         """Move between notes in document order."""
         if self.store is None or not self.store.items:
             return
         items = self.store.items
-        current = self.page_view._active_note
+        current = self.page_view.active_note
         index = items.index(current) + delta if current in items else (0 if delta > 0 else len(items) - 1)
         index = max(0, min(index, len(items) - 1))
         self.page_view.scroll_to_annotation(items[index])
@@ -1895,7 +2368,9 @@ class MainWindow(QMainWindow):
             widget.setEnabled(can_annotate)
         for action in (self.act_highlight, self.act_note, self.act_save_copy):
             action.setEnabled(can_annotate)
-        self.act_copy.setEnabled(has_document and self.page_view.selection is not None)
+        self._refresh_copy_action()
+        self.act_undo.setEnabled(can_annotate and bool(self._undo_stack))
+        self.act_redo.setEnabled(can_annotate and bool(self._redo_stack))
 
         count = len(self.store.items) if self.store else 0
         dirty = bool(self.store and self.store.dirty)
@@ -1928,6 +2403,18 @@ class MainWindow(QMainWindow):
         box.setText(title)
         box.setInformativeText(message)
         box.exec()
+
+    def resizeEvent(self, event) -> None:  # noqa: N802 - Qt naming
+        """Keep a floating markup bar inside the window when it narrows.
+
+        Nothing else moves it: it is a child of the viewport at a fixed point,
+        so a window dragged smaller would otherwise leave it out of reach.
+        """
+        super().resizeEvent(event)
+        bar = getattr(self, "markup_bar", None)
+        if bar is not None and bar.home == "float":
+            bar.move(self._markup_float_point(bar.pos()))
+            bar.raise_()
 
     def closeEvent(self, event) -> None:  # noqa: N802 - Qt naming
         self._closing_save_shown = False
