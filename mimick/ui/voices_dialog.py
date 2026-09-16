@@ -8,7 +8,7 @@ from PySide6.QtCore import Qt, QThread, QTimer, Signal
 from PySide6.QtWidgets import (
     QAbstractItemView, QComboBox, QDialog, QDialogButtonBox, QHBoxLayout,
     QHeaderView, QLabel, QLineEdit, QMessageBox, QProgressBar, QPushButton,
-    QFrame, QStyle, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
+    QFrame, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
 )
 
 from ..engines import EngineError
@@ -23,64 +23,13 @@ def _size_text(size_bytes: int) -> str:
     return f"{size_bytes / 1_000_000:.0f} MB"
 
 
-# The passage every Piper voice is recorded saying, so it is the one phrase that
-# can be heard from a voice that has not been downloaded.
+# The passage every Piper voice is recorded saying. Because the publisher's
+# recording exists for every voice, this is the one phrase that can be heard
+# from a voice that has not been downloaded yet -- which is why it is the only
+# phrase Preview uses. Reading a phrase of your own needed the voice downloaded
+# first, so it could not do the one job a preview has.
 RAINBOW = ("When the sunlight strikes raindrops in the air, "
            "they act as a prism and form a rainbow.")
-DEFAULT_PHRASE = "This is what it sounds like when I read aloud."
-
-
-class PhraseRow(QFrame):
-    """One preview phrase: a bin, the words, and the chip that selects it."""
-
-    selected = Signal(str)
-    deleted = Signal(str)
-
-    def __init__(self, text: str, built_in: bool, current: bool,
-                 parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        self.setObjectName("PhraseRow")
-        self.text = text
-        self._built_in = built_in
-
-        row = QHBoxLayout(self)
-        row.setContentsMargins(8, 5, 8, 5)
-        row.setSpacing(8)
-
-        if built_in:
-            # The default phrase stays put; only added ones can be removed.
-            spacer = QLabel("")
-            spacer.setFixedWidth(26)
-            row.addWidget(spacer)
-        else:
-            bin_button = QPushButton()
-            bin_button.setFixedWidth(26)
-            bin_button.setIcon(self.style().standardIcon(
-                QStyle.StandardPixmap.SP_TrashIcon))
-            bin_button.setToolTip("Remove this phrase")
-            bin_button.clicked.connect(lambda: self.deleted.emit(self.text))
-            row.addWidget(bin_button)
-
-        words = QLabel(f"\u201c{text}\u201d")
-        words.setWordWrap(False)
-        words.setToolTip(text)
-        row.addWidget(words, 1)
-
-        self.chip = QPushButton()
-        self.chip.setFixedWidth(84)
-        self.chip.setToolTip(
-            "Tap to make this the phrase Preview speaks"
-            if not current else "Preview speaks this phrase"
-        )
-        self.chip.clicked.connect(lambda: self.selected.emit(self.text))
-        row.addWidget(self.chip)
-        self.set_current(current)
-
-    def set_current(self, current: bool) -> None:
-        self.chip.setText("current" if current else ("default" if self._built_in else "use"))
-        self.chip.setObjectName("ChipOn" if current else "Chip")
-        self.chip.style().unpolish(self.chip)
-        self.chip.style().polish(self.chip)
 
 
 class SamplePlayer(QThread):
@@ -111,36 +60,6 @@ class SamplePlayer(QThread):
             self.failed.emit(str(exc))
         except Exception as exc:
             self.failed.emit(f"Could not play that sample: {exc}")
-
-
-class SampleFetcher(QThread):
-    """Downloads the sample clips for a list of voices."""
-
-    progress = Signal(int, int)
-    done = Signal(int)
-
-    def __init__(self, catalogue: dict, keys: list[str]) -> None:
-        super().__init__()
-        self._catalogue, self._keys = catalogue, keys
-        self._stop = False
-
-    def cancel(self) -> None:
-        self._stop = True
-
-    def run(self) -> None:
-        got = 0
-        for position, key in enumerate(self._keys, start=1):
-            if self._stop:
-                break
-            entry = self._catalogue.get(key)
-            if entry and not piper.has_sample(key):
-                try:
-                    piper.fetch_sample(entry, key)
-                    got += 1
-                except Exception:
-                    pass          # one missing sample should not stop the rest
-            self.progress.emit(position, len(self._keys))
-        self.done.emit(got)
 
 
 class VoiceDownloader(QThread):
@@ -174,9 +93,7 @@ class OfflineVoicesDialog(QDialog):
         super().__init__(parent)
         self._settings = settings
         self.setWindowTitle("Offline voices")
-        # Taller than it was: the naming-and-preview row under the list needs
-        # its own line, and the list should not be the thing that pays for it.
-        self.setMinimumSize(680, 620)
+        self.setMinimumSize(680, 560)
         self._catalogue: dict = {}
         self._tick = QTimer(self)
         self._tick.setInterval(400)
@@ -184,7 +101,6 @@ class OfflineVoicesDialog(QDialog):
         self._tick.start()
         self._worker: VoiceDownloader | None = None
         self._sampler: SamplePlayer | None = None
-        self._fetcher: SampleFetcher | None = None
         self._player = ClipPlayer()
         # The voice the nickname box is showing, and a flag held up while the
         # list is rebuilt: between them they stop a refill overwriting a name
@@ -248,8 +164,8 @@ class OfflineVoicesDialog(QDialog):
         self.tree.currentItemChanged.connect(lambda *_: self._voice_picked())
         self.tree.itemDoubleClicked.connect(lambda *_: self._act())
         # A floor for the list, so the row beneath it cannot squeeze the thing
-        # the window is for down to three rows.
-        self.tree.setMinimumHeight(150)
+        # the window is for down to a few rows.
+        self.tree.setMinimumHeight(220)
         layout.addWidget(self.tree, 1)
 
         # Everything done to whichever voice is picked out, in one row under
@@ -258,6 +174,9 @@ class OfflineVoicesDialog(QDialog):
         # way from the list it acts on.
         controls = QHBoxLayout()
         controls.setSpacing(8)
+        # Clear of the list: the row read as being inside it otherwise, and the
+        # scrollbar came down to meet the buttons.
+        controls.setContentsMargins(0, 4, 0, 2)
 
         self.action_button = QPushButton("Download")
         self.action_button.setObjectName("Primary")
@@ -296,49 +215,20 @@ class OfflineVoicesDialog(QDialog):
         self.progress.setVisible(False)
         layout.addWidget(self.progress)
 
-        phrase_title = QLabel("Preview phrase")
-        phrase_title.setObjectName("Dim")
-        layout.addWidget(phrase_title)
-
-        self.phrase_box = QFrame()
-        self.phrase_box.setObjectName("PhraseBox")
-        self.phrase_layout = QVBoxLayout(self.phrase_box)
-        self.phrase_layout.setContentsMargins(4, 4, 4, 4)
-        self.phrase_layout.setSpacing(2)
-        layout.addWidget(self.phrase_box)
-
-        # Enter adds the phrase; a separate button beside a download button
-        # only muddied what each one did.
-        self.phrase_edit = QLineEdit()
-        self.phrase_edit.setPlaceholderText(
-            "Write a phrase and press Enter to add it\u2026"
-        )
-        self.phrase_edit.returnPressed.connect(self._add_phrase)
-        layout.addWidget(self.phrase_edit)
-
-        cache_row = QHBoxLayout()
-        cache_row.setSpacing(8)
-        self.cache_label = QLabel("")
-        self.cache_label.setObjectName("Dim")
-        cache_row.addWidget(self.cache_label, 1)
-
-        self.fetch_button = QPushButton("Get all recordings")
-        self.fetch_button.setToolTip(
-            "Download the recording for every voice in the list above, so "
-            "previews play instantly and work offline"
-        )
-        self.fetch_button.clicked.connect(self._fetch_samples)
-        cache_row.addWidget(self.fetch_button)
-
-        self.cache_delete = QPushButton("Delete saved recordings")
-        self.cache_delete.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_TrashIcon))
-        self.cache_delete.setToolTip(
-            "Remove the downloaded recordings. The phrases themselves stay, and "
-            "recordings download again next time you preview a voice."
-        )
-        self.cache_delete.clicked.connect(self._delete_cache)
-        cache_row.addWidget(self.cache_delete)
-        layout.addLayout(cache_row)
+        # What Preview will say. Every voice is recorded saying this passage,
+        # so it is the same words whether the voice is downloaded or not.
+        phrase = QFrame()
+        phrase.setObjectName("PhraseBox")
+        phrase_layout = QVBoxLayout(phrase)
+        phrase_layout.setContentsMargins(10, 8, 10, 8)
+        quote = QLabel(f"\u201c{RAINBOW}\u201d")
+        quote.setObjectName("Dim")
+        quote.setWordWrap(True)
+        policy = quote.sizePolicy()
+        policy.setHeightForWidth(True)
+        quote.setSizePolicy(policy)
+        phrase_layout.addWidget(quote)
+        layout.addWidget(phrase)
 
         self.status = QLabel("")
         self.status.setObjectName("Dim")
@@ -350,13 +240,12 @@ class OfflineVoicesDialog(QDialog):
         close.clicked.connect(self.reject)
         layout.addWidget(buttons)
 
-        # Enter in the phrase box should only add a phrase. Without this, Qt
-        # also fires whichever button it considers the dialog's default.
+        # Enter in the nickname box should only set a nickname. Without this,
+        # Qt also fires whichever button it considers the dialog's default.
         for button in self.findChildren(QPushButton):
             button.setAutoDefault(False)
             button.setDefault(False)
 
-        self._rebuild_phrases()
         self._load()
 
     # -- data --------------------------------------------------------------
@@ -508,35 +397,6 @@ class OfflineVoicesDialog(QDialog):
 
     # -- actions -----------------------------------------------------------
 
-    def _refresh_cache_row(self) -> None:
-        """One line describing the saved clips, or nothing if there are none."""
-        count, size = piper.cached_sample_count()
-        self.cache_delete.setVisible(count > 0)
-        if not count:
-            self.cache_label.setText("No preview recordings saved yet.")
-            self.cache_label.setToolTip("")
-            return
-        self.cache_label.setText(
-            f"Saved recordings of the default passage \u00b7 "
-            f"{count} voice{'s' if count != 1 else ''} \u00b7 {size / 1_000_000:.1f} MB"
-        )
-        self.cache_label.setToolTip(f"Stored in {piper.sample_cache_dir()}")
-
-    def _delete_cache(self) -> None:
-        answer = QMessageBox.question(
-            self, "Delete saved previews?",
-            "Delete every saved preview clip?\n\n"
-            "Your downloaded voices are not affected. Previews will be fetched "
-            "again the next time you play one.",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-        )
-        if answer != QMessageBox.StandardButton.Yes:
-            return
-        self._player.stop()
-        piper.clear_samples()
-        self._refill()
-        self.status.setText("Saved previews deleted.")
-
     def _current_key(self) -> str | None:
         item = self.tree.currentItem()
         return item.data(0, Qt.ItemDataRole.UserRole) if item else None
@@ -551,7 +411,6 @@ class OfflineVoicesDialog(QDialog):
 
         self.transport_button.setText("⏸" if self._player.playing else "▶")
         self.transport_button.setEnabled(bool(key) and self._sampler is None)
-        self._refresh_cache_row()
         if key and piper.is_installed(key):
             self.action_button.setText("Remove")
             self.action_button.setObjectName("")
@@ -571,118 +430,8 @@ class OfflineVoicesDialog(QDialog):
             return
         self._preview()
 
-    # -- preview phrases ---------------------------------------------------
-
-    def _saved_phrases(self) -> list[str]:
-        stored = (self._settings.get("preview_phrases") if self._settings else None) or []
-        return [p for p in stored if isinstance(p, str) and p.strip()]
-
-    def _current_phrase(self) -> str:
-        chosen = (self._settings.get("preview_phrase") if self._settings else "") or RAINBOW
-        if chosen != RAINBOW and chosen not in self._saved_phrases():
-            return RAINBOW
-        return chosen
-
-    def _rebuild_phrases(self) -> None:
-        """Redraw the phrase rows, marking which one Preview will speak."""
-        while self.phrase_layout.count():
-            item = self.phrase_layout.takeAt(0)
-            widget = item.widget()
-            if widget is not None:
-                widget.deleteLater()
-
-        current = self._current_phrase()
-        entries = [(RAINBOW, True)] + [(text, False) for text in self._saved_phrases()]
-        for text, built_in in entries:
-            row = PhraseRow(text, built_in, text == current, self.phrase_box)
-            for button in row.findChildren(QPushButton):
-                button.setAutoDefault(False)
-                button.setDefault(False)
-            row.selected.connect(self._choose_phrase)
-            row.deleted.connect(self._remove_phrase)
-            self.phrase_layout.addWidget(row)
-
-    def _choose_phrase(self, text: str) -> None:
-        if self._settings is not None:
-            self._settings.set("preview_phrase", text)
-        self._rebuild_phrases()
-        if text == RAINBOW:
-            self.status.setText(
-                "Preview will speak the default passage. Voices you have not "
-                "downloaded always play this one."
-            )
-        else:
-            self.status.setText(
-                "Preview will speak that phrase \u2014 for voices you have "
-                "downloaded. Others still play the default passage."
-            )
-
-    def _add_phrase(self) -> None:
-        text = self.phrase_edit.text().strip()
-        if not text or self._settings is None:
-            return
-        phrases = self._saved_phrases()
-        if text not in phrases:
-            phrases.append(text)
-            self._settings.set("preview_phrases", phrases)
-        self._settings.set("preview_phrase", text)
-        self.phrase_edit.clear()
-        self._rebuild_phrases()
-        self.status.setText("Phrase added, and Preview will now speak it.")
-
-    def _remove_phrase(self, text: str) -> None:
-        if self._settings is None:
-            return
-        phrases = [p for p in self._saved_phrases() if p != text]
-        self._settings.set("preview_phrases", phrases)
-        if self._current_phrase() == text:
-            self._settings.set("preview_phrase", RAINBOW)
-        self._rebuild_phrases()
-
-    def _fetch_samples(self) -> None:
-        """Download the sample clips for every voice currently listed."""
-        if self._fetcher is not None:
-            return
-        keys = [
-            self.tree.topLevelItem(i).data(0, Qt.ItemDataRole.UserRole)
-            for i in range(self.tree.topLevelItemCount())
-        ]
-        missing = [k for k in keys if not piper.has_sample(k) and not piper.is_installed(k)]
-        if not missing:
-            self.status.setText("Every voice in this list already has a preview saved.")
-            return
-        self.progress.setRange(0, len(missing))
-        self.progress.setValue(0)
-        self.progress.setVisible(True)
-        self.fetch_button.setEnabled(False)
-        self.status.setText(
-            f"Downloading {len(missing)} previews \u2014 roughly "
-            f"{len(missing) * 92 / 1000:.1f} MB."
-        )
-
-        fetcher = SampleFetcher(self._catalogue, missing)
-        # A lambda has no thread affinity, so Qt would run it inside the
-        # fetcher and touch widgets off the interface thread.
-        fetcher.progress.connect(self._fetch_progress, Qt.ConnectionType.QueuedConnection)
-        fetcher.done.connect(self._samples_fetched, Qt.ConnectionType.QueuedConnection)
-        fetcher.finished.connect(fetcher.deleteLater)
-        self._fetcher = fetcher
-        fetcher.start()
-
-    def _fetch_progress(self, done: int, _total: int) -> None:
-        self.progress.setValue(done)
-
-    def _samples_fetched(self, got: int) -> None:
-        self._fetcher = None
-        self.progress.setVisible(False)
-        self.progress.setRange(0, 0)
-        self.fetch_button.setEnabled(True)
-        self._refill()
-        self.status.setText(f"Saved {got} preview{'s' if got != 1 else ''}. "
-                            "They now play instantly, with no internet needed.")
-
     def _preview(self) -> None:
-        """Speak the phrase with a downloaded voice, or play the published sample."""
+        """Speak the passage with a downloaded voice, or play the recording of it."""
         key = self._current_key()
         if not key or self._sampler is not None:
             return
@@ -697,7 +446,7 @@ class OfflineVoicesDialog(QDialog):
             self.status.setText(f"Playing the saved sample of {name}")
         else:
             self.status.setText(f"Fetching a sample of {name}\u2026")
-        sampler = SamplePlayer(entry, key, self._current_phrase())
+        sampler = SamplePlayer(entry, key, RAINBOW)
         sampler.ready.connect(self._play_sample)
         sampler.failed.connect(self._sample_failed)
         sampler.finished.connect(sampler.deleteLater)
@@ -720,10 +469,9 @@ class OfflineVoicesDialog(QDialog):
         self._refill()
         name = self._nickname(key or "") or key
         if piper.is_installed(key or ""):
-            self.status.setText(f"{name} saying your phrase")
+            self.status.setText(f"{name} reading the passage")
         else:
-            self.status.setText(f"{name} \u2014 the publisher's sample. "
-                                "Download it to hear your own phrase.")
+            self.status.setText(f"{name} \u2014 the publisher's recording")
 
     def _sample_failed(self, message: str) -> None:
         self._sampler = None
@@ -767,8 +515,6 @@ class OfflineVoicesDialog(QDialog):
 
     def reject(self) -> None:
         self._player.stop()
-        if self._fetcher is not None:
-            self._fetcher.cancel()
         if self._worker is not None:
             QMessageBox.information(self, "Still downloading",
                                     "Wait for the download to finish first.")

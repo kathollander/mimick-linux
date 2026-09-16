@@ -43,32 +43,6 @@ QFrame#PhraseBox {{
     border: 1px solid {BORDER};
     border-radius: 8px;
 }}
-QFrame#PhraseRow {{ background: transparent; border: none; }}
-QFrame#PhraseRow:hover {{ background: {PANEL_HI}; border-radius: 6px; }}
-QPushButton#Chip {{
-    background: transparent;
-    border: 1px solid {BORDER};
-    border-radius: 10px;
-    padding: 2px 8px;
-    color: {TEXT_DIM};
-    font-size: 12px;
-}}
-QPushButton#Chip:hover {{ border-color: {ACCENT}; color: {TEXT}; }}
-QPushButton#ChipOn {{
-    background: {ACCENT};
-    border: 1px solid {ACCENT};
-    border-radius: 10px;
-    padding: 2px 8px;
-    color: #0b1220;
-    font-size: 12px;
-    font-weight: 600;
-}}
-
-QFrame#CacheRow {{
-    background: {PANEL_HI};
-    border: 1px solid {BORDER};
-    border-radius: 8px;
-}}
 
 QFrame#NotesPanel {{
     background: {NOTE_PANEL};

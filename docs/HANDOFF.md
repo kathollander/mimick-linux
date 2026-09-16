@@ -67,7 +67,7 @@ QT_QPA_PLATFORM=offscreen MIMICK_CONFIG_DIR=/tmp/mimick-test \
 | `mimick/ui/page_view.py` | The canvas: its own scroll area, page cache, notes panel, plan overlay. The panel scrolls separately from the page. |
 | `mimick/ui/markup_bar.py` | Highlight and Add note, and the four places they can be dragged to. |
 | `mimick/ui/main_window.py` | Everything else. The big one. |
-| `mimick/ui/voices_dialog.py` | The offline-voice catalogue: the list, previews, preview phrases, and the nicknames a reader gives a voice. |
+| `mimick/ui/voices_dialog.py` | The offline-voice catalogue: the list, previews, and the nicknames a reader gives a voice. |
 | `tools/` | `check_shortcuts.py`, `check_reading.py`, `check_caret.py`, `check_voices.py`. Run all four after changes. |
 
 **The reading pipeline**, in order: `layout._text_blocks` splits any MuPDF block
@@ -324,7 +324,7 @@ Paths below are Linux; on Windows `~/.config/mimick` is `%APPDATA%\Mimick` and
 `MIMICK_CACHE_DIR` override both on either platform.
 
 - `~/.config/mimick/settings.json` — voice, speed, zoom, reading positions,
-  per-document reading-order corrections, preview phrases.
+  per-document reading-order corrections, the names given to voices.
 - `~/.cache/mimick/piper/` — downloaded voices (~60 MB each).
 - `~/.cache/mimick/piper-samples/` — preview clips (~90 KB each).
 - `~/.cache/mimick/ffmpeg/` — Windows only; the copy `install.ps1` downloads.
@@ -451,9 +451,21 @@ exists and no key reaches it.
 after using it: everything done to whichever voice is picked out now sits in
 one row under the list -- **Download** (or **Remove**) at the left, and the
 nickname box, **Set nickname**, play/pause and **Preview** at the right -- with
-the preview phrases still below. Download was in the dialog's button box beside
-**Close**, a long way from the list it acts on; the button box has Close alone
-now. Naming by clicking a voice's name a second time,
+the passage Preview speaks quoted below. Download was in the dialog's button
+box beside **Close**, a long way from the list it acts on; the button box has
+Close alone now.
+
+Three things went at the same time, all of them asked for earlier and argued
+against by using the window. **Preview phrases of your own** are gone: a phrase
+can only be spoken by a voice already downloaded, so it could not do the one
+job a preview has, and the passage every Piper voice is recorded saying does
+that job for every voice in the list. `RAINBOW` is now the only phrase, quoted
+under the list so it is clear what will be heard, and `preview_phrase` and
+`preview_phrases` are out of `config.py`. **Get all recordings** and **Delete
+saved recordings** went with them -- the recordings are all of that one
+passage, they arrive on their own when a voice is previewed, and the status
+line already says how many are saved and what they take. `PhraseRow`,
+`SampleFetcher` and the chip styling in `theme.py` are gone with them. Naming by clicking a voice's name a second time,
 or with F2, is gone: it was easy to trigger by accident and easy to miss on
 purpose, and nothing in the list takes typing now. Nicknames are shown in
 italics, which is the only signal that a name is one the reader gave. The

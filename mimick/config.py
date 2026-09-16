@@ -39,8 +39,6 @@ DEFAULTS: dict[str, Any] = {
     "note_font": "",
     "note_size": 9.0,
     "author": "",
-    "preview_phrase": "",
-    "preview_phrases": [],
     "voice_nicknames": {},
     "export_finish": {"reveal": True},
     "recent": [],
