@@ -2,8 +2,9 @@
 
 Everything a fresh session needs to pick Mimick up. Written 11 September 2026,
 the evening the project was built; updated 12 September, the day it was
-published and v0.2.0 released, and again on 15--16 September after eight changes
-to the reader itself, none of them committed yet -- see **Where it stands**.
+published and v0.2.0 released, and again on 16 September after ten changes to
+the reader itself, which are on a branch and in an open pull request rather
+than on `main` -- see **Where it stands**.
 
 ## What Mimick is
 
@@ -438,6 +439,17 @@ is on `main` yet, so a fresh clone still gets v0.2.0. What went up:
 It is one commit rather than several because the three files that carry both
 bodies of work cannot be split without leaving a commit where the cursor
 exists and no key reaches it.
+
+**Do not merge it yet.** Kat has more changes to make first, and they belong on
+the same branch. The working tree is already on `reader-and-voice-list`, so
+carry on there: commit, `git push`, and the new commits join pull request #2 by
+themselves. **Do not start a fresh branch off `main`** -- `main` is still at
+v0.2.0, so a branch cut from it would not have any of the work above in it, and
+the two would have to be reconciled later. `git branch --show-current` says
+which branch you are on; `git checkout reader-and-voice-list` puts you back if
+something has moved you off it. The pull request is merged, when it is merged,
+from the **Merge pull request** button at
+<https://github.com/kathollander/mimick/pull/2>.
 
 **What has not been checked by hand.** Everything above was tested offscreen,
 with synthesized mouse events for the dragging and the ×. **Nobody has yet
