@@ -58,7 +58,6 @@ def stub_catalogue() -> None:
     piper.installed_voices = lambda: list(INSTALLED)
     piper.is_installed = lambda key: key in INSTALLED
     piper.has_sample = lambda key: False
-    piper.cached_sample_count = lambda: (0, 0)
     piper.download_size = lambda entry: 63_000_000
 
 

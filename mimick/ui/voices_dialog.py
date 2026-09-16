@@ -319,12 +319,9 @@ class OfflineVoicesDialog(QDialog):
             self.tree.addTopLevelItem(item)
 
         count = self.tree.topLevelItemCount()
-        samples, size = piper.cached_sample_count()
         self.status.setText(
             f"{count} voice{'s' if count != 1 else ''} shown · "
-            f"{len(installed)} installed · "
-            f"{samples} preview{'s' if samples != 1 else ''} saved "
-            f"({size / 1_000_000:.1f} MB)"
+            f"{len(installed)} installed"
         )
         if count:
             self._select(keep)

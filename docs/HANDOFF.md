@@ -463,9 +463,13 @@ that job for every voice in the list. `RAINBOW` is now the only phrase, quoted
 under the list so it is clear what will be heard, and `preview_phrase` and
 `preview_phrases` are out of `config.py`. **Get all recordings** and **Delete
 saved recordings** went with them -- the recordings are all of that one
-passage, they arrive on their own when a voice is previewed, and the status
-line already says how many are saved and what they take. `PhraseRow`,
-`SampleFetcher` and the chip styling in `theme.py` are gone with them. Naming by clicking a voice's name a second time,
+passage and arrive on their own when a voice is previewed, so there was nothing
+left to manage. The status line's count of them went too: it read as a problem
+with no button to fix it. `PhraseRow`, `SampleFetcher` and the chip styling in
+`theme.py` are gone with all of it, and `piper.cached_sample_count` and
+`piper.clear_samples` have no callers left -- the sample cache still fills
+itself in `~/.cache/mimick/piper-samples/`, and nothing in the window mentions
+it now. Naming by clicking a voice's name a second time,
 or with F2, is gone: it was easy to trigger by accident and easy to miss on
 purpose, and nothing in the list takes typing now. Nicknames are shown in
 italics, which is the only signal that a name is one the reader gave. The
