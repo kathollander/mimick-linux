@@ -22,7 +22,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from PySide6.QtCore import Qt                                      # noqa: E402
-from PySide6.QtWidgets import QAbstractItemView, QApplication      # noqa: E402
+from PySide6.QtWidgets import (                                    # noqa: E402
+    QAbstractItemView, QApplication, QDialogButtonBox,
+)
 
 from mimick.config import Settings                                 # noqa: E402
 from mimick.engines import piper                                   # noqa: E402
@@ -76,14 +78,19 @@ def check_dialog(settings: Settings) -> None:
     tree = dialog.tree
 
     print("The list")
-    controls = [
-        dialog.nickname_edit, dialog.nickname_button,
+    # Download at the left, naming and previewing at the right, with the
+    # stretch between them that holds them apart.
+    wanted = [
+        dialog.action_button, None, dialog.nickname_edit, dialog.nickname_button,
         dialog.transport_button, dialog.preview_button,
     ]
     row = dialog.layout().itemAt(dialog.layout().indexOf(tree) + 1).layout()
-    check("naming and previewing sit in one row under the list",
-          row is not None and [row.itemAt(i).widget() for i in range(1, row.count())]
-          == controls)
+    check("one row under the list holds everything done to a voice",
+          row is not None
+          and [row.itemAt(i).widget() for i in range(row.count())] == wanted)
+    box = [b.text() for b in
+           dialog.findChild(QDialogButtonBox).buttons()]
+    check("and the button box is left with Close alone", box == ["Close"], str(box))
 
     check("opens on the suggested voice",
           dialog._current_key() == piper.SUGGESTED, dialog._current_key() or "none")

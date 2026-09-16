@@ -252,11 +252,17 @@ class OfflineVoicesDialog(QDialog):
         self.tree.setMinimumHeight(150)
         layout.addWidget(self.tree, 1)
 
-        # Naming the voice and hearing it, in the corner under the list: the
-        # two things done to whichever voice is picked out, next to each other
-        # rather than one above the list and one beside the search box.
+        # Everything done to whichever voice is picked out, in one row under
+        # the list: getting it on the left, naming and hearing it on the right.
+        # Download used to sit in the dialog's button box beside Close, a long
+        # way from the list it acts on.
         controls = QHBoxLayout()
         controls.setSpacing(8)
+
+        self.action_button = QPushButton("Download")
+        self.action_button.setObjectName("Primary")
+        self.action_button.clicked.connect(self._act)
+        controls.addWidget(self.action_button)
         controls.addStretch(1)
 
         self.nickname_edit = QLineEdit()
@@ -340,9 +346,6 @@ class OfflineVoicesDialog(QDialog):
         layout.addWidget(self.status)
 
         buttons = QDialogButtonBox()
-        self.action_button = buttons.addButton("Download", QDialogButtonBox.ButtonRole.ActionRole)
-        self.action_button.setObjectName("Primary")
-        self.action_button.clicked.connect(self._act)
         close = buttons.addButton("Close", QDialogButtonBox.ButtonRole.RejectRole)
         close.clicked.connect(self.reject)
         layout.addWidget(buttons)

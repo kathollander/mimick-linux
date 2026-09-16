@@ -448,10 +448,12 @@ bodies of work cannot be split without leaving a commit where the cursor
 exists and no key reaches it.
 
 **Also on the branch, later on 16 September.** The voices window was rearranged
-after using it: naming a voice and hearing it are the two things done to
-whichever voice is picked out, so they now sit in one row in the corner under
-the list -- nickname box, **Set nickname**, play/pause, **Preview** -- with the
-preview phrases still below. Naming by clicking a voice's name a second time,
+after using it: everything done to whichever voice is picked out now sits in
+one row under the list -- **Download** (or **Remove**) at the left, and the
+nickname box, **Set nickname**, play/pause and **Preview** at the right -- with
+the preview phrases still below. Download was in the dialog's button box beside
+**Close**, a long way from the list it acts on; the button box has Close alone
+now. Naming by clicking a voice's name a second time,
 or with F2, is gone: it was easy to trigger by accident and easy to miss on
 purpose, and nothing in the list takes typing now. Nicknames are shown in
 italics, which is the only signal that a name is one the reader gave. The
