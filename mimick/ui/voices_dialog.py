@@ -8,8 +8,7 @@ from PySide6.QtCore import Qt, QThread, QTimer, Signal
 from PySide6.QtWidgets import (
     QAbstractItemView, QComboBox, QDialog, QDialogButtonBox, QHBoxLayout,
     QHeaderView, QLabel, QLineEdit, QMessageBox, QProgressBar, QPushButton,
-    QFrame, QStyle, QStyledItemDelegate, QTreeWidget, QTreeWidgetItem,
-    QVBoxLayout, QWidget,
+    QFrame, QStyle, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
 )
 
 from ..engines import EngineError
@@ -29,20 +28,6 @@ def _size_text(size_bytes: int) -> str:
 RAINBOW = ("When the sunlight strikes raindrops in the air, "
            "they act as a prism and form a rainbow.")
 DEFAULT_PHRASE = "This is what it sounds like when I read aloud."
-
-
-class NameOnlyDelegate(QStyledItemDelegate):
-    """Lets the Voice column be renamed and leaves every other column alone.
-
-    Editability is a property of the whole row in a ``QTreeWidget``, so the
-    columns that describe the voice rather than name it are refused an editor
-    here instead.
-    """
-
-    def createEditor(self, parent, option, index):
-        if index.column() != 0:
-            return None
-        return super().createEditor(parent, option, index)
 
 
 class PhraseRow(QFrame):
@@ -189,7 +174,9 @@ class OfflineVoicesDialog(QDialog):
         super().__init__(parent)
         self._settings = settings
         self.setWindowTitle("Offline voices")
-        self.setMinimumSize(680, 520)
+        # Taller than it was: the naming-and-preview row under the list needs
+        # its own line, and the list should not be the thing that pays for it.
+        self.setMinimumSize(680, 620)
         self._catalogue: dict = {}
         self._tick = QTimer(self)
         self._tick.setInterval(400)
@@ -199,8 +186,10 @@ class OfflineVoicesDialog(QDialog):
         self._sampler: SamplePlayer | None = None
         self._fetcher: SampleFetcher | None = None
         self._player = ClipPlayer()
-        # True while the list is being rebuilt, so the text set there is
-        # not mistaken for a rename typed by the reader.
+        # The voice the nickname box is showing, and a flag held up while the
+        # list is rebuilt: between them they stop a refill overwriting a name
+        # part typed.
+        self._nickname_key: str | None = None
         self._filling = False
 
         layout = QVBoxLayout(self)
@@ -208,19 +197,23 @@ class OfflineVoicesDialog(QDialog):
         layout.setSpacing(12)
 
         blurb = QLabel(
-            "These are <b>Piper</b> voices, from the open Piper voice collection "
-            "published at <b>huggingface.co/rhasspy/piper-voices</b> \u2014 the same "
-            "voices Pied installs. They are community-trained, free to use, and "
-            "work with no internet once downloaded. Each is about 60 MB.<br><br>"
-            "Press <b>Preview</b> to hear one before downloading it. Higher "
-            "quality sounds better and takes a little longer to speak.<br><br>"
-            "Click a voice's name a second time to <b>give it a nickname</b> \u2014 "
-            "anything that helps you remember which one you liked. Empty the "
-            "box to put its own name back."
+            "These are <b>Piper</b> voices, from the open collection at "
+            "<b>huggingface.co/rhasspy/piper-voices</b> \u2014 the same voices Pied "
+            "installs. Community-trained, free, and they work with no internet "
+            "once downloaded; about 60 MB each, and higher quality takes a little "
+            "longer to speak. <b>Preview</b> hears one before you download it, and "
+            "a <b>nickname</b> is whatever will remind you which one you liked \u2014 "
+            "it shows in italics."
         )
         blurb.setWordWrap(True)
         blurb.setTextFormat(Qt.TextFormat.RichText)
         blurb.setObjectName("Dim")
+        # A wrapped label reports a one-line minimum, so a layout with anything
+        # else asking for room clips it. This makes the layout ask the label how
+        # tall it needs to be at the width it has been given.
+        policy = blurb.sizePolicy()
+        policy.setHeightForWidth(True)
+        blurb.setSizePolicy(policy)
         layout.addWidget(blurb)
 
         filters = QHBoxLayout()
@@ -236,19 +229,7 @@ class OfflineVoicesDialog(QDialog):
         self.language_box.setMinimumWidth(180)
         self.language_box.currentIndexChanged.connect(self._refill)
         filters.addWidget(self.language_box)
-
-        self.transport_button = QPushButton("▶")
-        self.transport_button.setFixedWidth(38)
-        self.transport_button.setToolTip("Play or pause the preview")
-        self.transport_button.clicked.connect(self._toggle_playback)
-        filters.addWidget(self.transport_button)
-
         filters.addStretch(1)
-
-        self.preview_button = QPushButton("Preview")
-        self.preview_button.setToolTip("Hear the selected voice")
-        self.preview_button.clicked.connect(self._preview)
-        filters.addWidget(self.preview_button)
         layout.addLayout(filters)
 
         self.tree = QTreeWidget()
@@ -256,21 +237,53 @@ class OfflineVoicesDialog(QDialog):
         self.tree.setRootIsDecorated(False)
         self.tree.setAlternatingRowColors(False)
         self.tree.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
-        # Clicking the row you are already on renames it, the way a file
-        # manager renames a file; F2 does the same from the keyboard.
-        self.tree.setEditTriggers(
-            QAbstractItemView.EditTrigger.SelectedClicked
-            | QAbstractItemView.EditTrigger.EditKeyPressed
-        )
-        self.tree.setItemDelegate(NameOnlyDelegate(self.tree))
-        self.tree.itemChanged.connect(self._renamed)
+        # Nothing is typed into the list. Naming a voice by clicking its name a
+        # second time, or with F2, was easy to trigger by accident and easy to
+        # miss on purpose; the nickname box under the list does it instead.
+        self.tree.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         header = self.tree.header()
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         for column in range(1, 5):
             header.setSectionResizeMode(column, QHeaderView.ResizeMode.ResizeToContents)
-        self.tree.currentItemChanged.connect(lambda *_: self._refresh_buttons())
+        self.tree.currentItemChanged.connect(lambda *_: self._voice_picked())
         self.tree.itemDoubleClicked.connect(lambda *_: self._act())
+        # A floor for the list, so the row beneath it cannot squeeze the thing
+        # the window is for down to three rows.
+        self.tree.setMinimumHeight(150)
         layout.addWidget(self.tree, 1)
+
+        # Naming the voice and hearing it, in the corner under the list: the
+        # two things done to whichever voice is picked out, next to each other
+        # rather than one above the list and one beside the search box.
+        controls = QHBoxLayout()
+        controls.setSpacing(8)
+        controls.addStretch(1)
+
+        self.nickname_edit = QLineEdit()
+        self.nickname_edit.setPlaceholderText("Nickname\u2026")
+        self.nickname_edit.setMaximumWidth(180)
+        self.nickname_edit.setToolTip(
+            "What to call the selected voice. Empty it to put its own name back."
+        )
+        self.nickname_edit.returnPressed.connect(self._set_nickname)
+        controls.addWidget(self.nickname_edit)
+
+        self.nickname_button = QPushButton("Set nickname")
+        self.nickname_button.setToolTip("Give the selected voice this name")
+        self.nickname_button.clicked.connect(self._set_nickname)
+        controls.addWidget(self.nickname_button)
+
+        self.transport_button = QPushButton("▶")
+        self.transport_button.setFixedWidth(38)
+        self.transport_button.setToolTip("Play or pause the preview")
+        self.transport_button.clicked.connect(self._toggle_playback)
+        controls.addWidget(self.transport_button)
+
+        self.preview_button = QPushButton("Preview")
+        self.preview_button.setToolTip("Hear the selected voice")
+        self.preview_button.clicked.connect(self._preview)
+        controls.addWidget(self.preview_button)
+        layout.addLayout(controls)
 
         self.progress = QProgressBar()
         self.progress.setRange(0, 0)      # busy, since size is not reported
@@ -402,8 +415,13 @@ class OfflineVoicesDialog(QDialog):
             # The real name is kept beside the key so a nickname can be cleared
             # by typing the name back, or by emptying the box.
             item.setData(0, Qt.ItemDataRole.UserRole + 1, person)
-            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsEditable)
             item.setToolTip(0, self._name_tip(key, person, nickname))
+            if nickname:
+                # A name the reader gave is set in italics, so it is obvious
+                # which voices have been named and which are as published.
+                font = item.font(0)
+                font.setItalic(True)
+                item.setFont(0, font)
             if key not in installed and piper.has_sample(key):
                 item.setText(4, "Preview ready")
             self.tree.addTopLevelItem(item)
@@ -423,13 +441,14 @@ class OfflineVoicesDialog(QDialog):
                 # jump either.
                 self.tree.verticalScrollBar().setValue(scrolled)
         self._filling = False
+        self._show_nickname()
         self._refresh_buttons()
 
     @staticmethod
     def _name_tip(key: str, person: str, nickname: str) -> str:
         if nickname:
-            return f"{person} \u00b7 {key}\nClick the name again to rename it"
-        return f"{key}\nClick the name again to give it a nickname"
+            return f"{person} \u00b7 {key}\nYou call this one {nickname}"
+        return key
 
     def _select(self, key: str | None) -> None:
         """Pick out a voice by key, falling back to the suggested one."""
@@ -444,21 +463,41 @@ class OfflineVoicesDialog(QDialog):
                     return
         self.tree.setCurrentItem(self.tree.topLevelItem(0))
 
-    def _renamed(self, item: QTreeWidgetItem, column: int) -> None:
-        """Remember what the reader has decided to call a voice."""
-        if self._filling or column != 0 or self._settings is None:
+    def _current_person(self) -> str:
+        """The voice's published name, kept beside its key in the list."""
+        item = self.tree.currentItem()
+        return (item.data(0, Qt.ItemDataRole.UserRole + 1) or "") if item else ""
+
+    def _voice_picked(self) -> None:
+        """A different voice is picked out, so the box shows that one's name."""
+        self._show_nickname()
+        self._refresh_buttons()
+
+    def _show_nickname(self) -> None:
+        """Put the selected voice's nickname in the box.
+
+        Only when the selection has actually moved, and never mid-refill: a
+        refill runs after every preview, and a tree being filled reports each
+        row it is given as the current one, so the selection appears to walk
+        the whole list. Either would wipe a name part typed.
+        """
+        key = self._current_key()
+        if self._filling or key is None or key == self._nickname_key:
             return
-        key = item.data(0, Qt.ItemDataRole.UserRole)
-        person = item.data(0, Qt.ItemDataRole.UserRole + 1) or ""
-        if not key:
+        self._nickname_key = key
+        self.nickname_edit.setText(self._nickname(key or ""))
+
+    def _set_nickname(self) -> None:
+        """Remember what the reader has decided to call the selected voice."""
+        key = self._current_key()
+        if not key or self._settings is None:
             return
-        typed = item.text(0).strip()
+        person = self._current_person()
+        typed = self.nickname_edit.text().strip()
         self._settings.set_nickname(key, "" if typed == person else typed)
         nickname = self._nickname(key)
-        self._filling = True
-        item.setText(0, nickname or person)
-        item.setToolTip(0, self._name_tip(key, person, nickname))
-        self._filling = False
+        self._refill()
+        self.nickname_edit.setText(nickname)
         self.status.setText(
             f"{person} is now {nickname} to you." if nickname
             else f"{person} goes by its own name again."
@@ -504,6 +543,8 @@ class OfflineVoicesDialog(QDialog):
         busy = self._worker is not None
         self.action_button.setEnabled(bool(key) and not busy)
         self.preview_button.setEnabled(bool(key) and self._sampler is None)
+        self.nickname_edit.setEnabled(bool(key))
+        self.nickname_button.setEnabled(bool(key))
 
         self.transport_button.setText("⏸" if self._player.playing else "▶")
         self.transport_button.setEnabled(bool(key) and self._sampler is None)

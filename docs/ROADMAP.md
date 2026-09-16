@@ -174,10 +174,11 @@ than read out mid-sentence.
 refilled the list, and the refill threw the selection back to the suggested
 voice — so every voice you listened to lost you the one you were on, in a list
 of 176. The refill now holds the selection, the scroll position and the status
-line it used to wipe. Beside that, clicking a voice's name a second time
-renames it: a nickname is stored against the voice's key in `voice_nicknames`,
-shows in the list and in the voice box in the main window, is searchable, and
-comes off again when the box is emptied. `tools/check_voices.py` covers both.
+line it used to wipe. Beside that, a voice can be given a nickname: typed into
+the box under the list, stored against the voice's key in `voice_nicknames`,
+shown in italics in the list and plainly in the voice box in the main window,
+searchable, and off again when the box is emptied. `tools/check_voices.py`
+covers both.
 
 ## Testing notes
 

@@ -239,6 +239,13 @@ voice must therefore not emit it, or naming a voice would drag the reader off
 the online voices mid-document. The main window picks nicknames up by calling
 `_relabel_voices` when the dialog closes instead.
 
+**17. A tree being filled reports every row it is given as the current one.**
+The nickname box shows the picked-out voice's name, so it is written to when
+the selection moves -- and during a refill the selection appears to walk the
+whole list, which wiped a name half typed. Comparing keys is not enough on its
+own: `_filling` is held up across the rebuild, and the box is written once at
+the end. The same shape as trap 15, one layer in.
+
 ## Windows
 
 Added on 12 September 2026 and **not yet run on a real Windows machine** — it
@@ -409,10 +416,10 @@ reading real documents; the rest were asked for:
   of the next are the same position, and it says which was meant.
 - **The offline-voice list keeps your place, and takes your names for the
   voices.** Previewing a voice refilled the list and lost the selection with it
-  — trap 15. Nicknames are the other half: clicking a voice's name a second
-  time renames it, the name is stored against the voice's key in
-  `voice_nicknames` and shows wherever the voice does, including the voice box
-  in the main window (trap 16 for why that is not wired through `changed`).
+  — trap 15. Nicknames are the other half: typed into the box under the list,
+  stored against the voice's key in `voice_nicknames`, and shown wherever the
+  voice does — in italics in the list, and in the voice box in the main window
+  (trap 16 for why that is not wired through `changed`).
   `tools/check_voices.py` is new and covers both.
 
 **All of it is now up, and waiting to be merged.** It went to the branch
@@ -439,6 +446,17 @@ is on `main` yet, so a fresh clone still gets v0.2.0. What went up:
 It is one commit rather than several because the three files that carry both
 bodies of work cannot be split without leaving a commit where the cursor
 exists and no key reaches it.
+
+**Also on the branch, later on 16 September.** The voices window was rearranged
+after using it: naming a voice and hearing it are the two things done to
+whichever voice is picked out, so they now sit in one row in the corner under
+the list -- nickname box, **Set nickname**, play/pause, **Preview** -- with the
+preview phrases still below. Naming by clicking a voice's name a second time,
+or with F2, is gone: it was easy to trigger by accident and easy to miss on
+purpose, and nothing in the list takes typing now. Nicknames are shown in
+italics, which is the only signal that a name is one the reader gave. The
+window is 100px taller in the bargain -- see trap 17 for the one thing that
+made the box harder than it looks.
 
 **Do not merge it yet.** Kat has more changes to make first, and they belong on
 the same branch. The working tree is already on `reader-and-voice-list`, so

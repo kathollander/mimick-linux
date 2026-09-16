@@ -145,8 +145,9 @@ For offline, **Voice → Manage offline voices** lists 176 Piper voices — abou
 60 MB each. `en_GB-alan-medium` is a good first choice.
 
 Previewing a voice leaves it picked out, so you can work down the list one at
-a time, and **clicking a voice's name a second time renames it** — give it
-whatever you will recognise later. Empty the box to put its own name back.
+a time, and the **nickname** box under the list gives the voice you have picked
+whatever name you will recognise later. Nicknames show in italics; empty the
+box to put the voice's own name back.
 
 **If your connection drops mid-document**, Mimick switches to an installed
 offline voice and carries on, provided you downloaded one beforehand.

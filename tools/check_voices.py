@@ -22,9 +22,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from PySide6.QtCore import Qt                                      # noqa: E402
-from PySide6.QtWidgets import (                                    # noqa: E402
-    QApplication, QStyleOptionViewItem,
-)
+from PySide6.QtWidgets import QAbstractItemView, QApplication      # noqa: E402
 
 from mimick.config import Settings                                 # noqa: E402
 from mimick.engines import piper                                   # noqa: E402
@@ -78,6 +76,15 @@ def check_dialog(settings: Settings) -> None:
     tree = dialog.tree
 
     print("The list")
+    controls = [
+        dialog.nickname_edit, dialog.nickname_button,
+        dialog.transport_button, dialog.preview_button,
+    ]
+    row = dialog.layout().itemAt(dialog.layout().indexOf(tree) + 1).layout()
+    check("naming and previewing sit in one row under the list",
+          row is not None and [row.itemAt(i).widget() for i in range(1, row.count())]
+          == controls)
+
     check("opens on the suggested voice",
           dialog._current_key() == piper.SUGGESTED, dialog._current_key() or "none")
 
@@ -93,15 +100,41 @@ def check_dialog(settings: Settings) -> None:
           dialog.status.text() == "a line about the preview", dialog.status.text())
 
     print("Nicknames")
+    check("the list itself takes no typing",
+          tree.editTriggers() == QAbstractItemView.EditTrigger.NoEditTriggers,
+          str(tree.editTriggers()))
+
+    # A name given in an earlier sitting, so this does not depend on what a
+    # previous run of this tool happened to leave behind.
+    settings.set_nickname(NAMED, "Set earlier")
+    dialog._refill()
+    pick(tree, "en_GB-alan-medium")
     pick(tree, NAMED)
-    tree.currentItem().setText(0, "  Warm one  ")
+    check("picking a voice shows its nickname in the box",
+          dialog.nickname_edit.text() == "Set earlier",
+          repr(dialog.nickname_edit.text()))
+
+    dialog.nickname_edit.setText("  Warm one  ")
+    dialog._set_nickname()
     check("a typed name is stored, trimmed", settings.nickname(NAMED) == "Warm one",
           repr(settings.nickname(NAMED)))
     check("and shown in the list", tree.currentItem().text(0) == "Warm one")
+    check("in italics, so a named voice is obvious",
+          tree.currentItem().font(0).italic())
 
     dialog._refill()
     check("it survives a refill, and so does the selection",
           tree.currentItem().text(0) == "Warm one" and dialog._current_key() == NAMED)
+
+    # What a refill after a preview must not do: throw away a name being typed.
+    dialog.nickname_edit.setText("half typ")
+    dialog._refill()
+    check("a refill leaves a half-typed name alone",
+          dialog.nickname_edit.text() == "half typ", dialog.nickname_edit.text())
+
+    pick(tree, "en_GB-alan-medium")
+    check("moving to another voice shows that one's name instead",
+          dialog.nickname_edit.text() == "", repr(dialog.nickname_edit.text()))
 
     dialog.search.setText("warm")
     check("searching finds a voice by its nickname",
@@ -109,23 +142,17 @@ def check_dialog(settings: Settings) -> None:
     dialog.search.clear()
 
     pick(tree, NAMED)
-    tree.currentItem().setText(0, "")
+    dialog.nickname_edit.clear()
+    dialog._set_nickname()
     check("emptying the box puts the real name back",
           settings.nickname(NAMED) == "" and tree.currentItem().text(0) == "Delta",
           tree.currentItem().text(0))
+    check("and takes the italics off again",
+          not tree.currentItem().font(0).italic())
 
-    tree.currentItem().setText(0, "Delta")
+    dialog.nickname_edit.setText("Delta")
+    dialog._set_nickname()
     check("typing the real name stores no nickname", settings.nickname(NAMED) == "")
-
-    delegate = tree.itemDelegate()
-    option = QStyleOptionViewItem()
-    editable = [
-        column for column in range(tree.columnCount())
-        if delegate.createEditor(
-            tree.viewport(), option,
-            tree.indexFromItem(tree.currentItem(), column)) is not None
-    ]
-    check("only the Voice column can be renamed", editable == [0], str(editable))
     dialog.deleteLater()
 
 
