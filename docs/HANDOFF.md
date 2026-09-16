@@ -447,43 +447,50 @@ It is one commit rather than several because the three files that carry both
 bodies of work cannot be split without leaving a commit where the cursor
 exists and no key reaches it.
 
-**Also on the branch, later on 16 September.** The voices window was rearranged
-after using it: everything done to whichever voice is picked out now sits in
-one row under the list -- **Download** (or **Remove**) at the left, and the
-nickname box, **Set nickname**, play/pause and **Preview** at the right -- with
-the passage Preview speaks quoted below. Download was in the dialog's button
-box beside **Close**, a long way from the list it acts on; the button box has
-Close alone now.
+**Also on the branch, later on 16 September.** The offline-voices window,
+reworked in five commits after using it rather than reading it. What it looks
+like now, top to bottom: the blurb, the search box and language filter, the
+list, then one row holding everything done to whichever voice is picked out --
+**Download** (or **Remove**) at the left, the nickname box, **Set nickname**,
+play/pause and **Preview** at the right -- then the passage Preview speaks,
+quoted, then the status line, then **Close** alone.
 
-Three things went at the same time, all of them asked for earlier and argued
-against by using the window. **Preview phrases of your own** are gone: a phrase
-can only be spoken by a voice already downloaded, so it could not do the one
-job a preview has, and the passage every Piper voice is recorded saying does
-that job for every voice in the list. `RAINBOW` is now the only phrase, quoted
-under the list so it is clear what will be heard, and `preview_phrase` and
-`preview_phrases` are out of `config.py`. **Get all recordings** and **Delete
-saved recordings** went with them -- the recordings are all of that one
-passage and arrive on their own when a voice is previewed, so there was nothing
-left to manage. The status line's count of them went too: it read as a problem
-with no button to fix it. `PhraseRow`, `SampleFetcher` and the chip styling in
-`theme.py` are gone with all of it, and `piper.cached_sample_count` and
-`piper.clear_samples` have no callers left -- the sample cache still fills
-itself in `~/.cache/mimick/piper-samples/`, and nothing in the window mentions
-it now.
+- **Naming a voice is a box, not a rename in the list.** Clicking a name a
+  second time, and F2, are both gone: easy to trigger by accident, easy to miss
+  on purpose. `setEditTriggers(NoEditTriggers)` -- nothing in the list takes
+  typing. Enter in the box sets the name, as the button does. A nickname shows
+  in *italics*, which is the only signal that a name is one the reader gave.
+- **Download came out of the dialog's button box**, where it sat beside Close,
+  a long way from the list it acts on and next to the one button in the window
+  that does nothing to a voice.
+- **Preview phrases of your own are gone**, with the chips that chose between
+  them. A phrase can only be spoken by a voice already downloaded, so it could
+  not do the one job a preview has -- telling you whether to download the voice
+  at all. The passage every Piper voice is recorded saying does that job for
+  every voice in the list, so `RAINBOW` is the only phrase now, quoted under
+  the list. `preview_phrase` and `preview_phrases` are out of `config.py`.
+- **Get all recordings and Delete saved recordings are gone**, and so is the
+  status line's count of saved recordings. They managed a cache of that one
+  passage which fills itself the first time a voice is previewed; the count
+  read as a problem with no button to fix it. The cache still fills itself in
+  `~/.cache/mimick/piper-samples/` and nothing in the window mentions it.
+- **Picking out a voice you have named says what it came with** --
+  `Warm one is your name for Delta · en_GB-delta-medium` -- because a name of
+  your own is the only thing in the list that hides what the voice actually is.
+  A voice with no nickname puts the list's summary back, so the line is never
+  stale.
+- **The list has a floor of 220px** and the row beneath it a margin, because
+  the two were running into each other. The window is 40px taller than it was
+  despite three blocks leaving it.
 
-Picking out a voice you have named says what it came with --
-`Warm one is your name for Delta · en_GB-delta-medium` -- because a name of
-your own is the only thing in the list that hides what the voice actually is.
-`_say_which_voice` runs on a selection the reader made and **not** from
-`_refill`: a refill walks the selection down every row as it fills, and its own
-status line is the summary, so writing this one there put it over the top of
-the preview's line. Trap 15 in its third guise. The same edit moved `_act`'s
-`Removed X` to after its refill, where it survives. Naming by clicking a voice's name a second time,
-or with F2, is gone: it was easy to trigger by accident and easy to miss on
-purpose, and nothing in the list takes typing now. Nicknames are shown in
-italics, which is the only signal that a name is one the reader gave. The
-window is 100px taller in the bargain -- see trap 17 for the one thing that
-made the box harder than it looks.
+`PhraseRow`, `SampleFetcher`, the chip styling in `theme.py` and the unused
+`QFrame#CacheRow` went with all this; `piper.cached_sample_count` and
+`piper.clear_samples` are left with no callers. `tools/check_voices.py` drives
+the nickname box rather than the list, and covers the italics, the status line
+and a name half typed. Traps 15 and 17 are the two that cost time here, and
+they are the same lesson one layer apart: **anything that refills a list the
+reader is working through has to put them back where they were, and must not
+write over what they are reading.**
 
 **Do not merge it yet.** Kat has more changes to make first, and they belong on
 the same branch. The working tree is already on `reader-and-voice-list`, so
@@ -502,10 +509,18 @@ dragged the markup bar with a real mouse, listened to 5×, or moved the text
 cursor with a real keyboard.** The questions worth answering first: is the top
 of the speed range actually comprehensible; does the word highlight still keep
 up with the voice at 4–5×; and does the cursor land where your eye expects
-after a pause. None of that is visible to a check tool. There are five throwaway test
-scripts for this work, none of them kept. `tools/` holds three check tools now;
-anything worth keeping should be written up there properly rather than left as
-a scratch script.
+after a pause. None of that is visible to a check tool.
+
+The voices window is in the same position: it has been driven by
+`tools/check_voices.py` and rendered offscreen at every size, but nothing in it
+has been clicked with a real mouse. It is installed on Kat's machine as of 16
+September and waiting to be used. What a check tool cannot answer: whether
+**Set nickname** earns its click or should save when you click away from the
+box, whether Download reads as belonging to the list now that Close sits alone,
+and whether the italics say *you named this one* at a glance.
+
+`tools/` holds four check tools; anything worth keeping should be written up
+there properly rather than left as a scratch script.
 
 **Windows remains the single biggest untested surface in the project** — see
 the Windows section above; nothing in it has met the platform it targets. The
@@ -514,12 +529,12 @@ people already using it on Linux, and the README now says so plainly in the
 heads-up box at the top rather than burying it in known issues.
 
 Not done: see [`ROADMAP.md`](ROADMAP.md). The release checklist there is the
-next thing to work through. The three most valuable tasks are **using the four
-changes above on a real reading**, which is the only way the speed range and
-the markup bar get judged; **trying it on more real documents** —
-`tools/check_reading.py` makes that quick — and **hearing back from the first
-Windows run**, which is the only part of the install path still unverified on
-either platform.
+next thing to work through. The most valuable tasks are **using the reader
+changes on a real reading**, which is the only way the speed range, the markup
+bar and the rearranged voices window get judged; **trying it on more real
+documents** — `tools/check_reading.py` makes that quick — and **hearing back
+from the first Windows run**, which is the only part of the install path still
+unverified on either platform.
 
 Published at **<https://github.com/kathollander/mimick>** (public, AGPL-3.0),
 pushed on 12 September 2026. Commit as `kathollander <kathoacct@pm.me>`, which
@@ -530,4 +545,7 @@ seconds), `* (notes).pdf` (the annotated copies Mimick writes as you work), and
 now **every PDF except the MDPI sample** — `Testing/*.pdf` with one exception,
 rather than a line per document, because the local test documents are journal
 articles that are not ours to redistribute. The MDPI article is kept: CC BY 4.0,
-and the docs and all three check tools point at it.
+it is what `tools/check_caret.py` opens by name, and it is the document the
+docs tell you to run. `tools/check_reading.py` is pointed at `Testing/` and
+takes whatever is there, so its result depends on which documents are in your
+own copy -- a flagged sentence there is not necessarily a regression.
