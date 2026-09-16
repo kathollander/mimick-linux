@@ -85,6 +85,13 @@ Select text and press `Ctrl`+`H` to highlight, or `Ctrl`+`M` to highlight and
 write a note. Notes sit in a panel beside the page, lined up with the passage
 they belong to. Double-click one to edit or delete it.
 
+**You can select without the mouse.** There is a text cursor, and it follows
+the voice as it reads — so when a passage is worth marking, pause, and the
+cursor is already sitting where you stopped listening. Paused, the arrow keys
+move it a word at a time (`↑` `↓` by line, `Home` and `End` along it), and
+holding `Shift` selects as you go. Then `Ctrl`+`H` or `Ctrl`+`M` as usual.
+While it is actually reading, `←` and `→` still skip a sentence.
+
 A note is stored *inside* its highlight, which is how PDFs work — so every note
 belongs to a highlight, and other readers show it as that highlight's comment.
 Set your name under **Notes → Note appearance** and it's saved as the author.
@@ -112,8 +119,13 @@ across a line break are rejoined, so "under- stood" is spoken as one word.
 Press `Ctrl`+`R` to see the decisions: numbered regions get read, dimmed ones
 don't, and **clicking any region changes it** — remembered for that document.
 
-Two switches in **Display** turn the skipping off if you want everything:
-*Skip citations while reading* and *Clean up text for reading*.
+**Footnotes** are read after the page they belong to, because that is where
+they sit — the voice finishes the page, then reads the notes. If that breaks
+your concentration, **Display → Read footnotes** turns them off. It is greyed
+out on a document with no footnotes in it.
+
+Two more switches in **Display** turn the rest of the skipping off if you want
+everything: *Skip citations while reading* and *Clean up text for reading*.
 
 ## Converting to MP3
 
@@ -131,6 +143,10 @@ recording when you want one.
 The default voices are Microsoft's online ones, the same as Edge's Read Aloud.
 For offline, **Voice → Manage offline voices** lists 176 Piper voices — about
 60 MB each. `en_GB-alan-medium` is a good first choice.
+
+Previewing a voice leaves it picked out, so you can work down the list one at
+a time, and **clicking a voice's name a second time renames it** — give it
+whatever you will recognise later. Empty the box to put its own name back.
 
 **If your connection drops mid-document**, Mimick switches to an installed
 offline voice and carries on, provided you downloaded one beforehand.

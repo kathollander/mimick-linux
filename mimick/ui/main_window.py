@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from functools import partial
 from pathlib import Path
 
 import sounddevice as sd
@@ -127,6 +128,9 @@ class MainWindow(QMainWindow):
         # just a selection while one is being read.
         self._active_sentences: list = []
         self._reading_selection = False
+        # Where a Shift+arrow selection started. Cleared by any plain cursor
+        # move, so the next Shift starts a fresh selection.
+        self._caret_anchor: int | None = None
         self._buffering = False
         self._resume_after_voices: int | None = None
         self.store: AnnotationStore | None = None
@@ -564,6 +568,17 @@ class MainWindow(QMainWindow):
         self.act_skip_citations.triggered.connect(self._toggle_citations)
         display_menu.addAction(self.act_skip_citations)
 
+        self.act_read_footnotes = QAction("Read &footnotes", self, checkable=True)
+        self.act_read_footnotes.setToolTip(
+            "Footnotes are read after the page they hang off, not where they\n"
+            "are referred to, so a long note interrupts the argument.\n\n"
+            "Turn this off to hear the page without them. Greyed out on a\n"
+            "document Mimick found no footnotes in."
+        )
+        self.act_read_footnotes.setChecked(True)
+        self.act_read_footnotes.triggered.connect(self._toggle_footnotes)
+        display_menu.addAction(self.act_read_footnotes)
+
         self.act_clean_text = QAction("Clean &up text for reading", self, checkable=True)
         self.act_clean_text.setToolTip(
             "Read the document, not the paperwork around it.\n\n"
@@ -716,6 +731,7 @@ class MainWindow(QMainWindow):
         )
 
         self.act_skip_citations.setChecked(bool(self.settings.get("skip_citations", True)))
+        self.act_read_footnotes.setChecked(bool(self.settings.get("read_footnotes", True)))
         self.act_clean_text.setChecked(bool(self.settings.get("clean_text", True)))
 
         show_plan = bool(self.settings.get("show_plan", False))
@@ -741,13 +757,46 @@ class MainWindow(QMainWindow):
         def bind(sequence: str, handler) -> None:
             QShortcut(QKeySequence(sequence), self, activated=handler)
 
+        def bind_on_page(sequence: str, handler) -> None:
+            """A key that only fires while the page itself has the keyboard.
+
+            Up, Down, Home and End belong to whatever is focused -- the page
+            number box steps with the arrows, and taking that away would be a
+            worse trade than the cursor is worth. Scoping them to the page
+            view leaves every other control exactly as it was.
+            """
+            shortcut = QShortcut(QKeySequence(sequence), self.page_view,
+                                 activated=handler)
+            shortcut.setContext(
+                Qt.ShortcutContext.WidgetWithChildrenShortcut)
+
         bind("Space", self.toggle_play)
         bind("Return", self.read_selection_or_play)
         bind("Enter", self.read_selection_or_play)
         bind("Escape", self.page_view.clear_selection)
         bind("Ctrl+A", self.select_page_text)
-        bind("Right", lambda: self.player.skip(1))
-        bind("Left", lambda: self.player.skip(-1))
+        # The cursor keys. Each one does two things -- moves the text cursor
+        # when playback is paused, and what it has always done while the voice
+        # is reading -- and the choice is made in one place, _move_caret.
+        #
+        # They are QShortcuts on the window rather than a keyPressEvent on the
+        # page view for two reasons: a window shortcut takes precedence over a
+        # focused widget's key handler, so the old Left/Right binds would
+        # swallow them anyway; and tools/check_shortcuts.py can only see keys
+        # bound this way, so this is what keeps that check honest.
+        for key, shifted, step, direction in (
+            ("Left", "Shift+Left", "word", -1),
+            ("Right", "Shift+Right", "word", 1),
+            ("Up", "Shift+Up", "line", -1),
+            ("Down", "Shift+Down", "line", 1),
+            ("Home", "Shift+Home", "line end", -1),
+            ("End", "Shift+End", "line end", 1),
+            ("Ctrl+Left", "Ctrl+Shift+Left", "sentence", -1),
+            ("Ctrl+Right", "Ctrl+Shift+Right", "sentence", 1),
+        ):
+            to_bind = bind if step in ("word", "sentence") else bind_on_page
+            to_bind(key, partial(self._move_caret, step, direction, False))
+            to_bind(shifted, partial(self._move_caret, step, direction, True))
         bind("Ctrl+=", lambda: self._zoom_by(1.15))
         bind("Page Down", lambda: self._go_page(self.page_view.page + 1))
         bind("Page Up", lambda: self._go_page(self.page_view.page - 1))
@@ -781,6 +830,7 @@ class MainWindow(QMainWindow):
                 path,
                 skip_citations=bool(self.settings.get("skip_citations", True)),
                 clean_text=bool(self.settings.get("clean_text", True)),
+                read_footnotes=bool(self.settings.get("read_footnotes", True)),
             )
         except Exception as exc:
             self._warn("That file could not be opened",
@@ -823,6 +873,17 @@ class MainWindow(QMainWindow):
         # finds the companion again, so the entry keeps working either way.
         self.settings.note_recent(original)
         self._refresh_recent()
+
+        # A document with no notes at the foot of its pages has nothing for the
+        # switch to do, and a live switch that changes nothing reads as broken.
+        self.act_read_footnotes.setEnabled(document.has_footnotes)
+
+        # The cursor starts where the reading does, so the arrow keys are
+        # useful before anything has been played or clicked.
+        self._caret_anchor = None
+        self.page_view.set_caret(0)
+        self.page_view.setFocus(Qt.FocusReason.OtherFocusReason)
+        self._refresh_caret_mode()
 
         self.setWindowTitle(f"{document.title} — Mimick")
         self._sync_zoom_controls()
@@ -882,13 +943,26 @@ class MainWindow(QMainWindow):
     def _forget_voice_loader(self) -> None:
         self._voice_loader = None
 
+    def _voice_label(self, voice) -> str:
+        """The name in the box \u2014 what the reader calls this voice, if anything."""
+        nickname = self.settings.nickname(voice.id)
+        return f"{nickname} \u00b7 {voice.locale}" if nickname else voice.label
+
+    def _relabel_voices(self) -> None:
+        """Take up nicknames given while the offline-voices window was open."""
+        by_id = {voice.id: voice for voice in self.voices}
+        for index in range(self.voice_box.count()):
+            voice = by_id.get(self.voice_box.itemData(index))
+            if voice is not None:
+                self.voice_box.setItemText(index, self._voice_label(voice))
+
     def _on_voices_loaded(self, voices: list) -> None:
         self.voices = voices
         preferred = self.settings.get("voice", "en-US-AvaNeural")
         self.voice_box.blockSignals(True)
         self.voice_box.clear()
         for voice in voices:
-            self.voice_box.addItem(voice.label, voice.id)
+            self.voice_box.addItem(self._voice_label(voice), voice.id)
         index = self.voice_box.findData(preferred)
         self.voice_box.setCurrentIndex(index if index >= 0 else 0)
         self.voice_box.blockSignals(False)
@@ -1035,6 +1109,9 @@ class MainWindow(QMainWindow):
         dialog = OfflineVoicesDialog(self.settings, self)
         dialog.changed.connect(self._offline_voices_changed)
         dialog.exec()
+        # Renaming a voice does not change which voices exist, so it does not
+        # go through `changed` \u2014 that would switch engines underfoot.
+        self._relabel_voices()
 
     def _offline_voices_changed(self) -> None:
         """Switch to Piper once a voice exists, or refresh the list if already on it."""
@@ -1088,6 +1165,8 @@ class MainWindow(QMainWindow):
 
         if self.player.is_playing:
             self.player.pause()
+            self._set_status("Paused — arrow keys move the cursor, "
+                             "Shift to select")
             return
         if self.player.is_active:          # paused mid-sentence, so carry on
             self.player.play()
@@ -1180,6 +1259,108 @@ class MainWindow(QMainWindow):
         if words:
             self.page_view.select_range(words[0].index, words[-1].index)
 
+    # -- the text cursor ---------------------------------------------------
+    #
+    # The cursor sits *in front of* a word, so an anchor at ``a`` and a cursor
+    # at ``c`` cover the words ``min(a, c)`` to ``max(a, c) - 1``, and ``a ==
+    # c`` is an empty selection. Everything below keeps to that; get it wrong
+    # in one place and a selection is a word out somewhere else.
+
+    def _move_caret(self, step: str, direction: int, extend: bool) -> None:
+        """An arrow key: move the cursor, or do what it did before.
+
+        While the voice is reading, these keys keep their old jobs -- left and
+        right skip a sentence, up, down, Home and End scroll -- because taking
+        them away would be taking away the keys you use while listening. The
+        cursor gets them the moment you pause.
+        """
+        if self.document is None or not self.document.words:
+            return
+        if self.player.is_playing:
+            self._reading_key(step, direction)
+            return
+
+        caret = self.page_view.caret
+        if caret < 0:
+            # Nothing has put the cursor anywhere yet, so start it at the top
+            # of the page being looked at.
+            words = self.document.page_words.get(self.page_view.page) or self.document.words
+            caret = words[0].index
+
+        # A selection made with the mouse, or cleared with Escape, leaves the
+        # keyboard anchor stale. Rather than hunt for every way that can
+        # happen, it is settled here, against what is actually selected.
+        selected = self.page_view.selection
+        if selected is None:
+            self._caret_anchor = None
+        elif self._caret_anchor is None:
+            first, final = selected
+            self._caret_anchor = first if caret > final else final + 1
+
+        moved, trailing = self._caret_step(caret, step, direction)
+        if extend:
+            if self._caret_anchor is None:
+                self._caret_anchor = caret
+            self._apply_caret_selection(moved)
+        else:
+            self._caret_anchor = None
+            self.page_view.clear_selection()
+
+        self.page_view.set_caret(moved, trailing)
+        self.page_view.ensure_caret_visible()
+
+    def _caret_step(self, caret: int, step: str,
+                    direction: int) -> tuple[int, bool]:
+        """Where a cursor at ``caret`` lands, and whether it ends a line.
+
+        Returns the new position along with the end-of-line flag described on
+        ``PageView.caret_trailing`` -- only ``End`` ever sets it.
+        """
+        last = len(self.document.words)          # one past the end is a place
+        if step == "word":
+            return max(0, min(caret + direction, last)), False
+        # Every other step is about where the words sit on the page, so it is
+        # answered from the word the cursor is actually beside: the one in
+        # front of it, or the one behind when it is sitting at a line's end.
+        here = caret - 1 if self.page_view.caret_trailing else caret
+        here = max(0, min(here, last - 1))
+        if step == "line":
+            return self.document.word_on_next_line(here, direction), False
+        if step == "line end":
+            first, final = self.document.line_ends(here)
+            return (final + 1, True) if direction > 0 else (first, False)
+        return self.document.sentence_step(here, direction), False
+
+    def _apply_caret_selection(self, caret: int) -> None:
+        anchor = self._caret_anchor
+        if anchor is None or anchor == caret:
+            self.page_view.clear_selection()
+            return
+        self.page_view.select_range(min(anchor, caret), max(anchor, caret) - 1)
+
+    def _reading_key(self, step: str, direction: int) -> None:
+        """What an arrow key does while the voice is actually reading.
+
+        A bound shortcut swallows the key, so the scrolling that Up, Down, Home
+        and End do for free when nothing is bound has to be asked for here by
+        name -- otherwise binding the cursor would quietly stop the page
+        scrolling during playback.
+        """
+        if step in ("word", "sentence"):
+            self.player.skip(direction)
+            return
+        bar = self.page_view.verticalScrollBar()
+        if step == "line":
+            bar.triggerAction(bar.SliderAction.SliderSingleStepAdd if direction > 0
+                              else bar.SliderAction.SliderSingleStepSub)
+        else:
+            bar.setValue(bar.maximum() if direction > 0 else bar.minimum())
+
+    def _refresh_caret_mode(self) -> None:
+        """Blink the cursor while paused; leave it steady while reading."""
+        self.page_view.set_caret_blinks(
+            self.document is not None and not self.player.is_playing)
+
     def _on_selection_changed(self, first: int, last: int) -> None:
         has_selection = first >= 0
         self._refresh_copy_action()
@@ -1235,6 +1416,7 @@ class MainWindow(QMainWindow):
     def _on_state(self, state: str) -> None:
         self._buffering = state == "buffering"
         self._refresh_play_button()
+        self._refresh_caret_mode()
 
     _OFFLINE_HINTS = ("could not reach", "connection", "network", "dns",
                       "timed out", "temporary failure", "unreachable", "resolve")
@@ -1580,6 +1762,24 @@ class MainWindow(QMainWindow):
         quotes, written = self.page_view.counts()
         self.filter_quotes.setText(f"Highlights{f'  {quotes}' if quotes else ''}")
         self.filter_written.setText(f"Notes{f'  {written}' if written else ''}")
+
+    def _toggle_footnotes(self, checked: bool) -> None:
+        """Read the notes at the foot of each page, or pass over them."""
+        self.settings.set("read_footnotes", checked)
+        if self.document is None:
+            return
+        was_playing = self.player.is_playing
+        self.player.stop()
+        self.document.set_read_footnotes(checked)
+        self._reading_selection = False
+        self._active_sentences = self.document.sentences
+        self.player.configure(self.document.sentences, self.engine,
+                              self._current_voice(), self._current_speed())
+        self.page_view.clear_highlight()
+        self._set_status("Footnotes will be read" if checked
+                         else "Footnotes will be passed over")
+        if was_playing:
+            self.player.play(0)
 
     def _toggle_citations(self, checked: bool) -> None:
         """Read in-text citations aloud, or pass over them."""

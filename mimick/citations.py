@@ -14,10 +14,27 @@ import re
 
 # A name as it appears in a citation: Smith, O'Brien, van der Berg, Wet'suwet'en.
 _NAME = r"[A-ZÀ-Ü][\w'’‐-―-]*"
+# Initials, with or without spaces between them: D.N., R., W. E. B.
+_INITIALS = r"[A-ZÀ-Ü]\.(?:\s*[A-ZÀ-Ü]\.)*"
+# The small words inside a corporate or legal name -- "Royal Commission *on*
+# Aboriginal Peoples", "van Krieken", "R. *v.* Marshall". Without these the
+# name stops at the first lowercase word and the year is never reached.
+_PARTICLE = (r"(?:and|of|for|on|in|the|v\.|van|von|de[rnl]?|del|della|di|du|"
+             r"da|dos|la|le|el|al|bin|ibn|y)")
+# An acronym the author gives in brackets, inside the citation itself:
+# "Royal Commission on Aboriginal Peoples [RCAP] 1996".
+_ACRONYM = r"\[[A-ZÀ-Ü][\w&.\s-]{0,40}\]"
+# One more piece of a name. "et al." is here rather than in the separator so
+# that the repeat below never has to match emptily.
+_NAME_PART = rf"(?:et\s+al\.|{_INITIALS}|{_ACRONYM}|{_PARTICLE}(?!\w)|{_NAME})"
 # The comma may follow the name with no space -- "Moreau, Mendick & Epstein" --
-# so it cannot be lumped in with the words, which do need one.
-_JOIN = r"(?:\s*,\s*|\s+(?:et\s+al\.|and|&)\s*)"
-_NAMES = rf"{_NAME}(?:{_JOIN}{_NAME}?)*"
+# so it cannot be lumped in with the words, which do need one. A plain space
+# joins them too: "Indian Act 1985" is one name, not a name and a stray word.
+_JOIN = r"(?:\s*,\s*|\s*&\s*|\s+)"
+# A name may open with a particle -- "van Krieken 2004" -- but not consist of
+# one, or "(and this matters)" would start looking like a citation.
+_NAMES = (rf"(?:{_PARTICLE}\s+)?(?:{_INITIALS}|{_NAME})"
+          rf"(?:{_JOIN}{_NAME_PART}){{0,12}}")
 # A reprint carries both dates: Piaget's (2008/1972).
 _ONE_YEAR = r"(?:1[5-9]|20)\d{2}[a-z]?"
 _YEAR = rf"{_ONE_YEAR}(?:\s*/\s*{_ONE_YEAR})?"

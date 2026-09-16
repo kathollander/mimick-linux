@@ -14,10 +14,10 @@ from __future__ import annotations
 
 from collections import OrderedDict
 
-from PySide6.QtCore import QEvent, QPoint, QRect, QSize, Qt, Signal
+from PySide6.QtCore import QEvent, QPoint, QRect, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import (QColor, QFont, QFontMetrics, QGuiApplication, QImage,
                            QPainter, QPen, QPixmap)
-from PySide6.QtWidgets import QAbstractScrollArea, QWidget
+from PySide6.QtWidgets import QAbstractScrollArea, QApplication, QWidget
 
 from ..document import Document, Sentence, _merge_rects
 from . import theme
@@ -37,6 +37,8 @@ NOTE_PAD = 18          # space between the page edge and the notes
 CARD_PAD = 10          # padding inside a note card
 CARD_GAP = 8           # smallest gap between stacked cards
 CARD_MIN_HEIGHT = 34
+CARET_WIDTH = 2        # the text cursor, in logical pixels
+CARET_OVERHANG = 1     # drawn a little above and below the word it sits by
 HEADING_GAP = 2        # between a note's heading and its body
 REMOVE_SIZE = 18       # the little x that takes a highlight away
 NOTES_WHEEL_STEP = 90  # how far one wheel notch moves the notes column
@@ -100,10 +102,27 @@ class PageView(QAbstractScrollArea):
         self._word_index = -1
         self._anchor = -1
         self._focus = -1
+        # The text cursor: the index of the word it sits *in front of*, or -1
+        # for none. It follows the voice while reading and the arrow keys when
+        # paused; see MainWindow._move_caret for the keys themselves.
+        self._caret = -1
+        # End puts the cursor after the last word of a line, which is the same
+        # place as before the first word of the next one. This says which of
+        # the two was meant, so the cursor is drawn on the line you are on and
+        # Home comes back to the start of that line rather than this one.
+        self._caret_trailing = False
+        self._caret_on = True            # the blink's current phase
+        self._caret_blinks = False       # only while playback is paused
+        self._blink = QTimer(self)
+        self._blink.timeout.connect(self._flash_caret)
         self._dragging = False
         self._press_point: QPoint | None = None
 
         self.viewport().setCursor(Qt.CursorShape.IBeamCursor)
+        # The page is what the keyboard is for. Without this the speed box
+        # holds focus from startup, and the arrow keys would be handed to it
+        # rather than moving the text cursor.
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setMinimumSize(420, 560)
         self.verticalScrollBar().valueChanged.connect(self._on_scrolled)
         self.horizontalScrollBar().valueChanged.connect(lambda _v: self.viewport().update())
@@ -555,6 +574,13 @@ class PageView(QAbstractScrollArea):
                         painter.setBrush(QColor(*theme.WORD_TINT))
                         painter.drawRoundedRect(self._to_widget(word.rect, page), 3, 3)
 
+        if self._caret_on:
+            caret = self.caret_rect()
+            if caret is not None:
+                painter.setBrush(QColor(theme.CARET))
+                painter.drawRect(caret.adjusted(0, -CARET_OVERHANG,
+                                                CARET_WIDTH, CARET_OVERHANG))
+
         painter.restore()
 
         if self._show_notes:
@@ -971,6 +997,15 @@ class PageView(QAbstractScrollArea):
         if sentence is not self._sentence or word_index != self._word_index:
             self._sentence = sentence
             self._word_index = word_index
+            # The cursor rides along with the voice, so pausing leaves it
+            # exactly where you stopped listening and the arrow keys carry on
+            # from there.
+            if sentence is not None and sentence.words:
+                spoken = (sentence.words[word_index]
+                          if 0 <= word_index < len(sentence.words)
+                          else sentence.words[0])
+                self._caret = spoken.index
+                self._caret_trailing = False
             self.viewport().update()
 
     def clear_highlight(self) -> None:
@@ -1001,6 +1036,86 @@ class PageView(QAbstractScrollArea):
             return          # already comfortably on screen, so leave it alone
         target = rect.center().y() - viewport // 3
         bar.setValue(max(0, min(target, bar.maximum())))
+
+    # -- the text cursor ---------------------------------------------------
+
+    @property
+    def caret(self) -> int:
+        """The word the cursor sits in front of, or -1 when there is none."""
+        return self._caret
+
+    @property
+    def caret_trailing(self) -> bool:
+        """Whether the cursor means the end of the line before it."""
+        return self._caret_trailing
+
+    def set_caret(self, index: int, trailing: bool = False) -> None:
+        if index == self._caret and trailing == self._caret_trailing:
+            return
+        self._caret = index
+        self._caret_trailing = trailing
+        # Any move restarts the blink on, so the cursor is never invisible at
+        # the moment you are looking for where it landed.
+        self._caret_on = True
+        if self._caret_blinks:
+            self._blink.start(self._blink.interval())
+        self.viewport().update()
+
+    def set_caret_blinks(self, blinks: bool) -> None:
+        """Blink while paused; sit steady while the voice is reading.
+
+        A blinking cursor says "type here", which is true when the arrow keys
+        move it and misleading while it is being dragged along by the voice.
+        The timer is stopped rather than ignored, so playback is not repainting
+        the viewport twice a second for nothing.
+        """
+        self._caret_blinks = blinks
+        self._caret_on = True
+        if blinks:
+            flash = QApplication.cursorFlashTime() or 1000
+            self._blink.start(max(flash // 2, 250))
+        else:
+            self._blink.stop()
+        self.viewport().update()
+
+    def _flash_caret(self) -> None:
+        self._caret_on = not self._caret_on
+        self.viewport().update()
+
+    def caret_rect(self) -> QRect | None:
+        """Where the cursor sits, in widget coordinates."""
+        if self._document is None or not self._offsets:
+            return None
+        words = self._document.words
+        if not words or not 0 <= self._caret <= len(words):
+            return None
+        # The cursor sits in front of a word, so one past the last word is a
+        # real position -- the end of the document -- and is drawn after it.
+        at_end = self._caret == len(words) or (self._caret_trailing
+                                                and self._caret > 0)
+        word = words[self._caret - 1 if at_end else self._caret]
+        if word.page >= len(self._offsets):
+            return None
+        x0, y0, x1, y1 = word.rect
+        edge = x1 if at_end else x0
+        return self._to_widget((edge, y0, edge, y1), word.page)
+
+    def ensure_caret_visible(self) -> None:
+        """Keep the cursor on screen, scrolling as little as will do it."""
+        rect = self.caret_rect()
+        if rect is None:
+            return
+        bar = self.verticalScrollBar()
+        top = rect.top() + bar.value()
+        bottom = rect.bottom() + bar.value()
+        margin = rect.height() * 2
+        if top - margin < bar.value():
+            bar.setValue(max(0, int(top - margin)))
+        elif bottom + margin > bar.value() + self.viewport().height():
+            bar.setValue(min(bar.maximum(),
+                             int(bottom + margin - self.viewport().height())))
+        # Which page is current, and the page indicator with it, is settled by
+        # _on_scrolled when the bar moves. Nothing to do here.
 
     # -- text selection ----------------------------------------------------
 
@@ -1069,6 +1184,10 @@ class PageView(QAbstractScrollArea):
             self.clear_selection()
             return
         self._anchor = self._focus = word.index
+        self._caret = word.index
+        self._caret_trailing = False
+        self._caret_on = True
+        self.setFocus(Qt.FocusReason.MouseFocusReason)
         self.viewport().update()
 
     def _on_move(self, event) -> None:
@@ -1096,6 +1215,12 @@ class PageView(QAbstractScrollArea):
             word = self._document.nearest_word_on_line(page, x, y)
         if word is not None and word.index != self._focus:
             self._focus = word.index
+            # The cursor rides the moving end of the drag, so letting go and
+            # pressing Shift+arrow carries on from where the pointer stopped
+            # rather than jumping back to where it started.
+            self._caret = (self._focus + 1 if self._focus >= self._anchor
+                           else self._focus)
+            self._caret_trailing = self._focus >= self._anchor
             self.viewport().update()
 
     def _on_release(self, event) -> None:

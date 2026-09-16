@@ -15,7 +15,7 @@ GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
     ("Reading", [
         ("Space", "Start reading, or pause it"),
         ("Enter", "Read the selected text, then stop"),
-        ("←  →", "Back or forward one sentence"),
+        ("←  →", "Back or forward one sentence, while it is reading"),
     ]),
     ("Choosing what gets read", [
         ("Click a sentence", "Start reading from there. Turn this off under "
@@ -26,6 +26,16 @@ GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
         ("Ctrl+A", "Select every word on the page"),
         ("Ctrl+C", "Copy the selected text, or the highlight you have clicked"),
         ("Esc", "Clear the selection"),
+    ]),
+    ("Moving the cursor — while reading is paused", [
+        ("←  →", "Back or forward one word"),
+        ("↑  ↓", "Up or down one line"),
+        ("Home / End", "Start or end of the line"),
+        ("Ctrl+← / Ctrl+→", "Start of the previous or next sentence"),
+        ("Shift+←  Shift+→", "Select word by word, then Ctrl+H or Ctrl+M"),
+        ("Shift+↑  Shift+↓", "Select line by line"),
+        ("Shift+Home / Shift+End", "Select to the start or end of the line"),
+        ("Ctrl+Shift+← / Ctrl+Shift+→", "Select to the next sentence"),
     ]),
     ("Moving around", [
         ("Page Up / Page Down", "Turn the page"),

@@ -202,9 +202,18 @@ class Document:
     """A PDF opened for reading aloud."""
 
     def __init__(self, path: Path, skip_citations: bool = True,
-                 clean_text: bool = True) -> None:
+                 clean_text: bool = True, read_footnotes: bool = True) -> None:
         self.path = Path(path)
         self.skip_citations = skip_citations
+        # Whether the notes at the foot of each page are spoken. They are read
+        # after the page they hang off, not where they are referred to, so a
+        # long apparatus interrupts the argument every page; this is the switch
+        # that turns them off. Kept separate from ``clean_text`` because a
+        # footnote is the author's own writing, not the paperwork around it.
+        self.read_footnotes = read_footnotes
+        # Words grouped into visual lines, per page, for moving a cursor up and
+        # down. Filled in on demand; see ``_lines_on``.
+        self._lines: dict[int, list[list[Word]]] = {}
         # Tidying extracted text for the voice: ligatures, stranded diacritics,
         # masthead and declarations, and the reference list. One switch, because
         # it is one idea -- read the document, not the paperwork around it.
@@ -273,7 +282,8 @@ class Document:
                         continue
                     claimed.add(position)
                     word = Word(text, (x0, y0, x1, y1), page_number,
-                                index=len(self.words), readable=region.reads,
+                                index=len(self.words),
+                                readable=self._region_reads(region),
                                 region=(page_number, number))
                     self.words.append(word)
                     on_page.append(word)
@@ -350,6 +360,32 @@ class Document:
                 word.sentence = sentence.index
             self.sentences.append(sentence)
 
+    def _region_reads(self, region) -> bool:
+        """Whether a region's words are spoken, footnotes included or not.
+
+        A footnote keeps its own label whichever way the switch is set, so the
+        reading plan can still say what it is and the setting can be changed
+        without analysing the page again -- which matters, because region order
+        is what word indices are keyed to and an annotation must keep pointing
+        at the same words.
+        """
+        if region.kind == layout.FOOTNOTE:
+            return self.read_footnotes
+        return region.reads
+
+    @property
+    def has_footnotes(self) -> bool:
+        """Whether this document has footnotes worth offering to skip."""
+        return any(region.kind == layout.FOOTNOTE
+                   for regions in self.regions.values() for region in regions)
+
+    def set_read_footnotes(self, read: bool) -> None:
+        """Start or stop reading the notes at the foot of each page."""
+        if read == self.read_footnotes:
+            return
+        self.read_footnotes = read
+        self.rebuild()
+
     def set_skip_citations(self, skip: bool) -> None:
         if skip == self.skip_citations:
             return
@@ -396,6 +432,7 @@ class Document:
         self.words = []
         self.page_words = {}
         self.sentences = []
+        self._lines = {}
         self._build_sentences()
 
     def sentences_from_range(self, first: int, last: int) -> list[Sentence]:
@@ -433,6 +470,110 @@ class Document:
             else:
                 parts.append(word.text + " ")
         return "".join(parts).strip()
+
+    # -- moving a cursor through the text ----------------------------------
+    #
+    # Left and right are just index steps: word order is region order, which is
+    # reading order, so stepping the index walks the text the way the voice
+    # does -- down a column and on to the next, never across a two-column page.
+    # Up, down, Home and End are the other thing entirely. They are about where
+    # the words sit on the paper, so they work from the rectangles.
+
+    def _lines_on(self, page: int) -> list[list[Word]]:
+        """The page's words grouped into visual lines, each ordered across.
+
+        Two words are on the same line when their rectangles overlap vertically
+        by more than half the shorter one -- which tolerates the way a capital,
+        a descender and a superscript all sit at slightly different heights.
+        Built on demand and cached; ``rebuild`` empties the cache, so the
+        footnote and citation switches cannot leave it describing words that
+        are no longer there.
+        """
+        cached = self._lines.get(page)
+        if cached is not None:
+            return cached
+        lines: list[list[Word]] = []
+        for word in sorted(self.page_words.get(page, ()), key=lambda w: w.rect[1]):
+            _, top, _, bottom = word.rect
+            for line in lines:
+                _, line_top, _, line_bottom = line[-1].rect
+                overlap = min(bottom, line_bottom) - max(top, line_top)
+                shorter = min(bottom - top, line_bottom - line_top)
+                if shorter > 0 and overlap > shorter / 2:
+                    line.append(word)
+                    break
+            else:
+                lines.append([word])
+        for line in lines:
+            line.sort(key=lambda w: w.rect[0])
+        lines.sort(key=lambda line: line[0].rect[1])
+        self._lines[page] = lines
+        return lines
+
+    def _line_of(self, index: int) -> tuple[list[list[Word]], int]:
+        """The lines of a word's page, and which of them the word is on."""
+        word = self.words[index]
+        lines = self._lines_on(word.page)
+        for position, line in enumerate(lines):
+            if any(other.index == index for other in line):
+                return lines, position
+        return lines, -1
+
+    def line_ends(self, index: int) -> tuple[int, int]:
+        """The first and last word of the line this word is on."""
+        if not (0 <= index < len(self.words)):
+            return index, index
+        lines, position = self._line_of(index)
+        if position < 0:
+            return index, index
+        line = lines[position]
+        return line[0].index, line[-1].index
+
+    def word_on_next_line(self, index: int, direction: int) -> int:
+        """The word directly above or below this one, by horizontal position.
+
+        At the top or bottom of a page it carries on to the neighbouring page,
+        so holding an arrow key walks the whole document rather than stopping
+        at a page edge.
+        """
+        if not (0 <= index < len(self.words)):
+            return index
+        word = self.words[index]
+        centre = (word.rect[0] + word.rect[2]) / 2
+        lines, position = self._line_of(index)
+        if position < 0:
+            return index
+        target = position + direction
+        if not 0 <= target < len(lines):
+            page = word.page + direction
+            if not 0 <= page < self.page_count:
+                return index
+            neighbour = self._lines_on(page)
+            if not neighbour:
+                return index
+            lines, target = neighbour, 0 if direction > 0 else len(neighbour) - 1
+        return min(lines[target],
+                   key=lambda w: abs((w.rect[0] + w.rect[2]) / 2 - centre)).index
+
+    def sentence_step(self, index: int, direction: int) -> int:
+        """The first word of the previous or next sentence.
+
+        Stepping back from inside a sentence goes to its own start first, the
+        way a word processor does, so the key is useful for getting to the head
+        of the line you just heard.
+        """
+        if not self.sentences or not (0 <= index < len(self.words)):
+            return index
+        here = self.words[index].sentence
+        if here < 0:
+            return index
+        first = self.sentences[here].words[0].index
+        if direction < 0 and index > first:
+            return first
+        target = here + direction
+        if not 0 <= target < len(self.sentences):
+            return first if direction < 0 else self.sentences[here].words[-1].index
+        return self.sentences[target].words[0].index
 
     # -- lookups used by the UI -------------------------------------------
 

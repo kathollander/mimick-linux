@@ -15,6 +15,9 @@ ACCENT_DEEP = "#3a7fe0"
 SENTENCE_TINT = (91, 157, 255, 48)
 WORD_TINT = (255, 190, 60, 130)
 SELECTION_TINT = (120, 200, 255, 70)
+# The text cursor. Brighter than the page so it is findable at a glance, and
+# the same blue as everything else that means "you are here".
+CARET = "#7fb4ff"
 
 # The strip down the right where notes are written.
 NOTE_PANEL = "#1a1d23"

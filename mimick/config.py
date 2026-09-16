@@ -31,6 +31,7 @@ DEFAULTS: dict[str, Any] = {
     "show_notes": True,
     "show_plan": False,
     "skip_citations": True,
+    "read_footnotes": True,
     "clean_text": True,
     "panel_shows_quotes": True,
     "panel_shows_notes": True,
@@ -40,6 +41,7 @@ DEFAULTS: dict[str, Any] = {
     "author": "",
     "preview_phrase": "",
     "preview_phrases": [],
+    "voice_nicknames": {},
     "export_finish": {"reveal": True},
     "recent": [],
     "positions": {},
@@ -75,6 +77,24 @@ class Settings:
 
     def set(self, key: str, value: Any) -> None:
         self._data[key] = value
+        self.save()
+
+    # -- voice nicknames ---------------------------------------------------
+
+    def nickname(self, voice_id: str) -> str:
+        """What this reader calls that voice, or "" if they have not said."""
+        stored = self._data.get("voice_nicknames") or {}
+        name = stored.get(voice_id)
+        return name.strip() if isinstance(name, str) else ""
+
+    def set_nickname(self, voice_id: str, name: str) -> None:
+        """Name a voice, or forget the name when given an empty one."""
+        names = dict(self._data.get("voice_nicknames") or {})
+        if name.strip():
+            names[voice_id] = name.strip()
+        else:
+            names.pop(voice_id, None)
+        self._data["voice_nicknames"] = names
         self.save()
 
     # -- reading positions -------------------------------------------------

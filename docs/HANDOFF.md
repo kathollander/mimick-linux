@@ -2,8 +2,8 @@
 
 Everything a fresh session needs to pick Mimick up. Written 11 September 2026,
 the evening the project was built; updated 12 September, the day it was
-published and v0.2.0 released, and again on 15 September after four changes to
-the reader itself.
+published and v0.2.0 released, and again on 15--16 September after eight changes
+to the reader itself, none of them committed yet -- see **Where it stands**.
 
 ## What Mimick is
 
@@ -43,6 +43,10 @@ settings actually in use:
 ```bash
 QT_QPA_PLATFORM=offscreen MIMICK_CONFIG_DIR=/tmp/mimick-test \
     .venv/bin/python tools/check_shortcuts.py
+QT_QPA_PLATFORM=offscreen MIMICK_CONFIG_DIR=/tmp/mimick-test \
+    .venv/bin/python tools/check_caret.py
+QT_QPA_PLATFORM=offscreen MIMICK_CONFIG_DIR=/tmp/mimick-test \
+    .venv/bin/python tools/check_voices.py
 .venv/bin/python tools/check_reading.py Testing/
 ```
 
@@ -52,7 +56,7 @@ QT_QPA_PLATFORM=offscreen MIMICK_CONFIG_DIR=/tmp/mimick-test \
 | --- | --- |
 | `mimick/system.py` | Every platform difference: folder locations, ffmpeg, console-window suppression. |
 | `mimick/document.py` | PDF → words → sentences. Word order, hyphen rejoining, run breaking. |
-| `mimick/layout.py` | Recursive XY-cut. Decides which regions are body, aside or furniture. |
+| `mimick/layout.py` | Recursive XY-cut. Decides which regions are body, aside, furniture or footnote. |
 | `mimick/citations.py` | Regexes for in-text citations, so `[51]` is not read aloud. |
 | `mimick/speech.py` | Cleanup before the voice: ligatures, stranded accents, masthead and declarations. |
 | `mimick/player.py` | Playback: prefetch queue, transport, word-timing alignment. |
@@ -62,10 +66,13 @@ QT_QPA_PLATFORM=offscreen MIMICK_CONFIG_DIR=/tmp/mimick-test \
 | `mimick/ui/page_view.py` | The canvas: its own scroll area, page cache, notes panel, plan overlay. The panel scrolls separately from the page. |
 | `mimick/ui/markup_bar.py` | Highlight and Add note, and the four places they can be dragged to. |
 | `mimick/ui/main_window.py` | Everything else. The big one. |
-| `tools/` | `check_shortcuts.py`, `check_reading.py`. Run both after changes. |
+| `mimick/ui/voices_dialog.py` | The offline-voice catalogue: the list, previews, preview phrases, and the nicknames a reader gives a voice. |
+| `tools/` | `check_shortcuts.py`, `check_reading.py`, `check_caret.py`, `check_voices.py`. Run all four after changes. |
 
-**The reading pipeline**, in order: `layout.analyse` cuts each page into regions
-and labels them, then marks the reference list and everything after it →
+**The reading pipeline**, in order: `layout._text_blocks` splits any MuPDF block
+that is really two columns side by side → `layout.analyse` cuts each page into
+regions and labels them, then marks the footnotes and the reference list and
+everything after it →
 `Document._build_sentences` walks regions in reading order, taking words from
 readable ones and passing each through `speech.normalise` → runs break at region
 boundaries, except where one region stops mid-sentence and the next starts
@@ -216,6 +223,21 @@ The matching trap is on the other side — a `QLayout` cannot be swapped while i
 is installed, so `MarkupBar._rebuild_layout` hands the old one to a throwaway
 `QWidget` to be destroyed with it rather than emptying it in place.
 
+**15. Rebuilding a list throws away where the reader was.**
+`OfflineVoicesDialog._refill` clears the tree and refills it, and it runs after
+a *preview* as well as after a search — so listening to a voice put the
+selection back on the suggested one, in a list of 176, and there was no way to
+tell where you had got to. It now keeps the current key, the scroll position
+and the status line. The same call used to be made *after* the preview wrote
+its status line, silently wiping it. **Anything that refills a list the reader
+is working through has to put them back where they were.**
+
+**16. `changed` on the voices dialog means the voices changed.**
+`MainWindow._offline_voices_changed` switches the engine to Piper. Renaming a
+voice must therefore not emit it, or naming a voice would drag the reader off
+the online voices mid-document. The main window picks nicknames up by calling
+`_relabel_voices` when the dialog closes instead.
+
 ## Windows
 
 Added on 12 September 2026 and **not yet run on a real Windows machine** — it
@@ -351,14 +373,76 @@ itself, all driven by using it rather than reading it:
   the page or on a card offers copy, read and delete; and a picked-out highlight
   carries a small × in the page margin that removes it in one click.
 
+**Also done on 15--16 September.** Six more. The first three were found by
+reading real documents; the rest were asked for:
+
+- **Footnotes are labelled, and can be switched off** (**Display → Read
+  footnotes**). Detection wants three signals at once — a number at the start,
+  low on the page, in type smaller than the body — and then a sequence that
+  climbs. They are still read after the page rather than where they are
+  referred to; see `layout._mark_footnotes` for why that cannot be fixed
+  without cutting body text mid-sentence. The label is applied whichever way
+  the switch is set, so region order — and therefore word indices, and
+  therefore annotations — never move when it is flipped.
+- **A label column and the paragraph beside it are pulled apart.** MuPDF
+  returned them as one block with their lines alternating, so the abstract read
+  a keyword at a time. `layout._text_blocks` splits such a block before the cut
+  sees it. This is a second instance of trap 12's lesson: what the reader hears
+  is decided before the XY cut, not only by it.
+- **A footer set well above the foot of the page is caught.** The furniture
+  band is a fixed share of the page height, and a generous bottom margin puts
+  the footer above it, so a volume-and-page line was read at the end of every
+  page. `layout._strand_footer` moves a last block that nothing comes near
+  into the band; the repetition and scrap tests still decide.
+- **More citation shapes are passed over** — initials, corporate and legal
+  names, and an acronym given in brackets.
+- **A text cursor for selecting by keyboard.** It follows the voice while
+  reading and takes the arrow keys when paused; Shift selects. One word at a
+  time, because that is what a highlight can store. **The keys belong in
+  `MainWindow._build_shortcuts`** -- a window `QShortcut` takes precedence over
+  a focused widget's `keyPressEvent`, so moving them onto the page view would
+  break them silently, and `tools/check_shortcuts.py` would not notice. Up,
+  down, Home and End are scoped to the page view (`bind_on_page`), which is
+  what leaves the page number box its own arrows. `PageView.caret_trailing` is
+  the one piece of state worth knowing about: the end of a line and the start
+  of the next are the same position, and it says which was meant.
+- **The offline-voice list keeps your place, and takes your names for the
+  voices.** Previewing a voice refilled the list and lost the selection with it
+  — trap 15. Nicknames are the other half: clicking a voice's name a second
+  time renames it, the name is stored against the voice's key in
+  `voice_nicknames` and shows wherever the voice does, including the voice box
+  in the main window (trap 16 for why that is not wired through `changed`).
+  `tools/check_voices.py` is new and covers both.
+
+**Nothing above is committed.** It is all sitting in the working tree on
+`main`, which is where Kat wanted it until she has used it. `git status` shows
+thirteen modified files and one new one:
+
+| Changed | Why |
+| --- | --- |
+| `mimick/layout.py` | Footnotes, the block-splitting pre-pass, the stranded footer |
+| `mimick/document.py` | The footnote switch, and the cursor's movement helpers |
+| `mimick/citations.py` | More citation shapes |
+| `mimick/ui/main_window.py` | The footnote menu item, and every cursor key |
+| `mimick/ui/page_view.py` | The cursor itself: state, painting, blink, focus |
+| `mimick/ui/theme.py`, `shortcuts_dialog.py`, `export_dialog.py`, `config.py` | A colour, the key list, the export pass-through, one default |
+| `tools/check_caret.py` | **New.** Drives the cursor with real key events |
+| `docs/FUTURE-FEATURES.md` | **New.** The browser-port question, and what decides it |
+| `README.md`, `docs/ROADMAP.md`, `docs/HANDOFF.md`, `.gitignore` | Kept in step |
+
+When it does go up: a branch, not a commit straight to `main` — v0.2.0 went
+through a pull request and there is no reason to stop.
+
 **What has not been checked by hand.** Everything above was tested offscreen,
 with synthesized mouse events for the dragging and the ×. **Nobody has yet
-dragged the markup bar with a real mouse, or listened to 5×.** The two
-questions worth answering first: is the top of the speed range actually
-comprehensible, and does the word highlight still keep up with the voice at
-4–5×? Neither is visible to a check tool. There are five throwaway test
-scripts for this work, none of them kept — `tools/` still holds only the two
-check tools, and anything worth keeping should be written up there properly.
+dragged the markup bar with a real mouse, listened to 5×, or moved the text
+cursor with a real keyboard.** The questions worth answering first: is the top
+of the speed range actually comprehensible; does the word highlight still keep
+up with the voice at 4–5×; and does the cursor land where your eye expects
+after a pause. None of that is visible to a check tool. There are five throwaway test
+scripts for this work, none of them kept. `tools/` holds three check tools now;
+anything worth keeping should be written up there properly rather than left as
+a scratch script.
 
 **Windows remains the single biggest untested surface in the project** — see
 the Windows section above; nothing in it has met the platform it targets. The
@@ -379,7 +463,8 @@ pushed on 12 September 2026. Commit as `kathollander <kathoacct@pm.me>`, which
 is what the initial LICENSE commit used.
 
 Git-ignored in `Testing/`: `*.mp3` (conversions run to 26 MB and regenerate in
-seconds), `* (notes).pdf` (the annotated copies Mimick now writes as you work),
-and the *For the Learning of Mathematics* paper, which unlike the MDPI sample is
-not openly licensed. The MDPI article is kept — CC BY 4.0, and the docs and both
-check tools point at it.
+seconds), `* (notes).pdf` (the annotated copies Mimick writes as you work), and
+now **every PDF except the MDPI sample** — `Testing/*.pdf` with one exception,
+rather than a line per document, because the local test documents are journal
+articles that are not ours to redistribute. The MDPI article is kept: CC BY 4.0,
+and the docs and all three check tools point at it.

@@ -10,5 +10,7 @@ Testing/*.mp3
 * (notes).pdf
 
 # Documents used for testing that are not ours to redistribute. The MDPI
-# sample is kept because it is CC BY 4.0; anything else stays local.
-Testing/Why cant i be a mathematician.pdf
+# sample is kept because it is CC BY 4.0; anything else stays local, so the
+# rule is "everything, except that one" rather than a line per document.
+Testing/*.pdf
+!Testing/Big Ideas from Atleo and Boron 2022.pdf

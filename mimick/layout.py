@@ -35,6 +35,12 @@ FURNITURE_MIN_PAGES = 3
 # A stray scrap in the header or footer band, like a journal's logo, is
 # furniture even if it only appears once.
 FURNITURE_SCRAP_CHARS = 25
+# A page with a generous bottom margin puts its footer above the band -- one
+# sample journal sets it 85pt clear of the foot of the page, well inside where
+# body text could be. So a last line left stranded this far below everything
+# else on its page is treated as sitting in the band, and then has to earn the
+# label the ordinary way: by repeating across pages, or by being a scrap.
+FURNITURE_STRANDED = 30.0
 
 # A region off to one side, narrower than this share of the main column, is
 # treated as marginalia rather than part of the text.
@@ -49,6 +55,7 @@ ASIDE = "aside"
 FURNITURE = "furniture"
 SKIPPED = "skipped"          # the reader excluded it by hand
 REFERENCES = "references"    # the bibliography, and whatever follows it
+FOOTNOTE = "footnote"        # the notes at the foot of a page
 
 # The heading that opens a reference list. It has to be the whole of the first
 # line of a region -- possibly numbered, possibly in capitals -- so a sentence
@@ -62,6 +69,22 @@ _REFERENCE_HEADING = re.compile(
 # A reference list lives at the end. Requiring it in the back of the document
 # stops a "References" line in a table of contents from silencing everything.
 REFERENCES_FROM_SHARE = 0.5
+
+# A footnote opens with its number, then a space, then the note itself:
+# "1 The terminology I use to refer to Indigenous peoples...". The number is
+# the only marker Mimick looks for -- a footnote marked with * or a dagger is
+# not found, and the document simply reads as it did before.
+_FOOTNOTE_MARKER = re.compile(r"^(\d{1,3})\s+(?=\S)")
+# Footnotes sit in the bottom of the page. This is deliberately generous: a
+# page can be half footnotes, and the band only has to exclude the body text
+# above them -- the marker and the smaller type do the real work.
+FOOTNOTE_FROM_SHARE = 0.55
+# Set smaller than the body, which is what makes a footnote a footnote. A
+# region in ordinary body type that merely starts with a number is a numbered
+# list or a heading, and is left alone.
+FOOTNOTE_SMALLER = 0.5       # points below the document's usual size
+# One numbered block low on one page is not a footnote apparatus.
+FOOTNOTE_MIN = 2
 
 
 @dataclass
@@ -85,7 +108,7 @@ class Region:
         return {
             BODY: "read", ASIDE: "side note",
             FURNITURE: "header or footer", SKIPPED: "skipped",
-            REFERENCES: "reference list",
+            REFERENCES: "reference list", FOOTNOTE: "footnote",
         }.get(self.kind, self.kind)
 
     def contains(self, x: float, y: float, pad: float = 1.0) -> bool:
@@ -153,6 +176,26 @@ def _normalise(text: str) -> str:
     return re.sub(r"\d+", "#", " ".join(text.split()))[:60]
 
 
+def _strand_footer(blocks: list) -> list:
+    """Move a footer stranded above the band into it, if the page has one.
+
+    The lowest block on the page, if nothing else comes within
+    ``FURNITURE_STRANDED`` of it, is where a footer sits whatever the margin.
+    It is only moved to the edge band, not declared furniture outright: the
+    repetition and scrap tests still have to agree, so a short closing line of
+    text is safe.
+    """
+    if len(blocks) < 2:
+        return blocks
+    lowest = max(range(len(blocks)), key=lambda i: blocks[i][3])
+    above = max(block[3] for index, block in enumerate(blocks)
+                if index != lowest)
+    block = blocks[lowest]
+    if block[6] == BAND_MIDDLE and block[1] - above >= FURNITURE_STRANDED:
+        blocks[lowest] = block[:6] + (BAND_EDGE,)
+    return blocks
+
+
 def _furniture_keys(pages: dict[int, list]) -> set[str]:
     """Lines that repeat near the top or bottom of many pages."""
     counts: collections.Counter = collections.Counter()
@@ -195,16 +238,174 @@ def _mark_references(result: dict[int, list[Region]], page_count: int) -> None:
             region.reason = "the reference list, and what follows it"
 
 
+def _span_sizes(page) -> list[tuple[float, float, float, int]]:
+    """Every run of text on a page as (centre x, centre y, type size, length).
+
+    Region rectangles come from the block extraction, which does not carry a
+    font size, so the sizes are matched back to regions by position. The extra
+    pass costs a few hundredths of a second on a long document.
+    """
+    spans: list[tuple[float, float, float, int]] = []
+    for block in page.get_text("dict").get("blocks", ()):
+        for line in block.get("lines", ()):
+            for span in line.get("spans", ()):
+                text = span.get("text") or ""
+                if not text.strip():
+                    continue
+                x0, y0, x1, y1 = span["bbox"]
+                spans.append(((x0 + x1) / 2, (y0 + y1) / 2,
+                              float(span.get("size") or 0.0), len(text)))
+    return spans
+
+
+def _median(values: list[float]) -> float:
+    ordered = sorted(values)
+    middle = len(ordered) // 2
+    if not ordered:
+        return 0.0
+    if len(ordered) % 2:
+        return ordered[middle]
+    return (ordered[middle - 1] + ordered[middle]) / 2
+
+
+def _mark_footnotes(result: dict[int, list[Region]],
+                    sizes: dict[int, list], heights: dict[int, float]) -> None:
+    """Label the notes at the foot of each page, so the reader can skip them.
+
+    Footnotes are read *after* the page they hang off, because they are their
+    own regions at the bottom of it and reading order is region order. That is
+    right for the page and wrong for the sentence: the voice finishes a
+    paragraph, then reads a note belonging to something said two paragraphs
+    ago. Nothing can put them back where they are referred to without cutting
+    the body text mid-sentence, so the choice offered is whether to hear them
+    at all.
+
+    Three signals have to agree, because a false positive silences real text:
+    the region begins with a number, it sits in the bottom of the page, and it
+    is set smaller than the document's usual type. The numbers then have to run
+    upwards through the document -- restarting at 1 on a page is allowed, as
+    some journals number per page -- and there have to be at least two.
+    """
+    weighted: list[float] = []
+    for page_spans in sizes.values():
+        for _cx, _cy, size, length in page_spans:
+            weighted.extend([size] * max(length, 1))
+    body_size = _median(weighted)
+    if body_size <= 0:
+        return
+
+    candidates: list[tuple[Region, int]] = []
+    for number in sorted(result):
+        height = heights.get(number) or 0.0
+        page_spans = sizes.get(number) or []
+        for region in result[number]:
+            if region.kind != BODY:
+                continue
+            marker = _FOOTNOTE_MARKER.match(region.text)
+            if marker is None:
+                continue
+            if not height or region.rect[1] < height * FOOTNOTE_FROM_SHARE:
+                continue
+            inside = [(size, length) for cx, cy, size, length in page_spans
+                      if region.contains(cx, cy, pad=2.0)]
+            if not inside:
+                continue
+            spread: list[float] = []
+            for size, length in inside:
+                spread.extend([size] * max(length, 1))
+            if _median(spread) > body_size - FOOTNOTE_SMALLER:
+                continue
+            candidates.append((region, int(marker.group(1))))
+
+    if len(candidates) < FOOTNOTE_MIN:
+        return
+    previous = 0
+    for _region, marker in candidates:
+        if marker <= previous and marker != 1:
+            return
+        previous = marker
+
+    for region, _marker in candidates:
+        region.kind = FOOTNOTE
+        region.reason = "a footnote at the bottom of the page"
+
+
+def _text_blocks(page) -> list[tuple[float, float, float, float, str]]:
+    """The page's text blocks, with side-by-side ones pulled apart.
+
+    MuPDF sometimes hands back a sidebar and the text beside it as a single
+    block -- on the sample article the keyword list and the abstract come back
+    together, and their lines alternate, so the page reads "Keywords The
+    purpose of this article", then the second keyword, then the second line of
+    the abstract. The XY cut cannot fix that, because by the time it sees the
+    page the two columns are one rectangle.
+
+    So before the cut, a block whose own lines fall into columns -- separated
+    by a clear vertical gap that no line crosses, and standing side by side
+    rather than one after the other -- is handed back as one block per column.
+    Everything else comes back exactly as MuPDF gave it.
+    """
+    blocks: list[tuple[float, float, float, float, str]] = []
+    for block in page.get_text("dict").get("blocks", ()):
+        if block.get("type") != 0:
+            continue
+        lines = []
+        for line in block.get("lines", ()):
+            text = "".join(span.get("text") or "" for span in line.get("spans", ()))
+            if text.strip():
+                lines.append((line["bbox"], text))
+        if not lines:
+            continue
+        for column in _columns(lines):
+            x0 = min(bbox[0] for bbox, _t in column)
+            y0 = min(bbox[1] for bbox, _t in column)
+            x1 = max(bbox[2] for bbox, _t in column)
+            y1 = max(bbox[3] for bbox, _t in column)
+            text = "\n".join(t for _bbox, t in
+                             sorted(column, key=lambda line: line[0][1]))
+            blocks.append((x0, y0, x1, y1, text))
+    blocks.sort(key=lambda block: (block[1], block[0]))
+    return blocks
+
+
+def _columns(lines: list) -> list[list]:
+    """Split a block's lines into columns, or hand back the one block of them.
+
+    Lines of an ordinary paragraph share a left margin, so they overlap and
+    fall into a single column. Two columns are only accepted when they also
+    overlap vertically: otherwise a heading above a short indented line would
+    be split from the text it belongs to.
+    """
+    ordered = sorted(lines, key=lambda line: line[0][0])
+    columns: list[list] = [[ordered[0]]]
+    reach = ordered[0][0][2]
+    for line in ordered[1:]:
+        if line[0][0] - reach >= MIN_GAP_X:
+            columns.append([])
+        columns[-1].append(line)
+        reach = max(reach, line[0][2])
+    if len(columns) < 2:
+        return [lines]
+    spans = [(min(bbox[1] for bbox, _t in column),
+              max(bbox[3] for bbox, _t in column)) for column in columns]
+    for (top, bottom), (next_top, next_bottom) in zip(spans, spans[1:]):
+        if min(bottom, next_bottom) - max(top, next_top) <= 0:
+            return [lines]
+    return columns
+
+
 def analyse(document, skip_references: bool = True) -> dict[int, list[Region]]:
     """Group every page of a document into regions, in reading order."""
     pages: dict[int, list] = {}
+    sizes: dict[int, list] = {}
+    heights: dict[int, float] = {}
     for number in range(document.page_count):
         page = document.doc.load_page(number)
         height = page.rect.height
+        heights[number] = height
+        sizes[number] = _span_sizes(page)
         blocks = []
-        for x0, y0, x1, y1, text, _no, kind in page.get_text("blocks", sort=True):
-            if kind != 0 or not text.strip():
-                continue
+        for x0, y0, x1, y1, text in _text_blocks(page):
             top, bottom = height * FURNITURE_BAND, height * (1 - FURNITURE_BAND)
             # A title and a running header sit at the same height, so the top of
             # the page needs a second signal -- repetition across pages, or being
@@ -219,7 +420,7 @@ def analyse(document, skip_references: bool = True) -> dict[int, list[Region]]:
             else:
                 band = BAND_MIDDLE
             blocks.append((x0, y0, x1, y1, text, number, band))
-        pages[number] = blocks
+        pages[number] = _strand_footer(blocks)
 
     repeated = _furniture_keys(pages)
     result: dict[int, list[Region]] = {}
@@ -293,6 +494,7 @@ def analyse(document, skip_references: bool = True) -> dict[int, list[Region]]:
             region.order = position
         result[number] = regions
 
+    _mark_footnotes(result, sizes, heights)
     if skip_references:
         _mark_references(result, document.page_count)
     return result

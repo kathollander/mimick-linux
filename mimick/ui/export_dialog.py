@@ -210,6 +210,7 @@ class ExportDialog(QDialog):
                 self.document.path,
                 skip_citations=self.document.skip_citations,
                 clean_text=self.clean_box.isChecked(),
+                read_footnotes=self.document.read_footnotes,
             )
         return self._alternate
 

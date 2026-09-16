@@ -80,6 +80,10 @@ Released 12 September 2026:
 
 ## In hand — not released yet
 
+The first four of these are committed on `main`. Everything from **Footnotes**
+down is uncommitted, sitting in the working tree until it has been used on a
+real reading — see the handoff for the file-by-file state.
+
 **Speed past 3×, and the 3× that was not.** Neither voice engine will speak
 much faster than twice normal: Edge's service clamps its `prosody rate` at
 +100% and returns byte-identical audio for 2×, 3× and 6× alike, so the 2.5×
@@ -115,12 +119,76 @@ passage, or delete it; and a picked-out highlight carries a small x -- in the
 page's margin, level with its last line, so it never sits on a word -- that
 removes it in one click. Every removal is undoable.
 
+**Footnotes, and a switch for them.** A numbered block, low on the page, set
+smaller than the body type is labelled a footnote; the numbers then have to
+climb through the document, restarting at 1 per page allowed, and there have to
+be at least two of them. All three signals must agree, because a false positive
+silences real text. **Display → Read footnotes** turns them off, and is greyed
+out where there are none. They are still read *after* the page rather than
+where they are referred to -- nothing can move them without cutting the body
+text mid-sentence -- so the choice offered is whether to hear them at all.
+A footnote keeps its label either way, so the switch never renumbers regions
+and annotations keep pointing at the same words.
+
+**A sidebar and the text beside it, as one block.** MuPDF hands back a page's
+text in blocks, and it sometimes puts a narrow label column and the paragraph
+next to it in one -- their lines alternating, so a keyword list reads a word at
+a time into the abstract. The XY cut cannot undo that: by then the two columns
+are one rectangle. So before the cut, a block whose own lines fall into columns
+-- separated by a gap no line crosses, and standing side by side rather than
+one after the other -- is split into one block per column. Everything else is
+passed through as MuPDF gave it. See `layout._text_blocks`.
+
+**A text cursor, for selecting without the mouse.** Highlighting meant dragging
+across the page. There is now a cursor that follows the read-along point, so
+pausing leaves it where you stopped listening; the arrow keys move it by word,
+line and sentence, and Shift selects as it goes. It moves a word at a time
+rather than a letter, because a highlight is stored as a run of whole words --
+a letter-wise cursor could show a selection it could not save. While the voice
+is reading the arrows keep their old jobs, so nothing you use while listening
+was taken away.
+
+The keys are `QShortcut`s in `MainWindow._build_shortcuts`, not a
+`keyPressEvent` on the page view, and should stay there: a window shortcut
+beats a focused widget's key handler, and `tools/check_shortcuts.py` can only
+see keys bound that way. Left and right are window-wide, as they always were;
+up, down, Home and End are scoped to the page view with
+`WidgetWithChildrenShortcut`, because otherwise the page number box loses its
+own arrows -- a worse trade than the cursor is worth. `tools/check_caret.py`
+drives the whole thing with real key events, and checks both halves of that.
+
+**A footer too far from the foot of the page.** Furniture was found in a band
+8.5% deep at the top and bottom. A journal that sets its footer 85pt clear of
+the page edge puts it above that band, so `VOLUME 19, ISSUE 1, 2024 ·3` was
+read out at the end of every page. The lowest block on a page, if nothing else
+comes within 30pt of it, is now treated as being in the band -- and then still
+has to repeat across pages, or be a scrap, before it is called furniture. See
+`layout._strand_footer`.
+
+**Citations with more shapes.** Initials, corporate and legal names, and an
+acronym given in brackets are recognised, so `R. v. Marshall 1999` and
+`Royal Commission on Aboriginal Peoples [RCAP] 1996` are passed over rather
+than read out mid-sentence.
+
+**The voice list keeps your place, and takes your names.** Previewing a voice
+refilled the list, and the refill threw the selection back to the suggested
+voice — so every voice you listened to lost you the one you were on, in a list
+of 176. The refill now holds the selection, the scroll position and the status
+line it used to wipe. Beside that, clicking a voice's name a second time
+renames it: a nickname is stored against the voice's key in `voice_nicknames`,
+shows in the list and in the voice box in the main window, is searchable, and
+comes off again when the box is emptied. `tools/check_voices.py` covers both.
+
 ## Testing notes
 
 `MIMICK_CONFIG_DIR` and `MIMICK_CACHE_DIR` redirect settings and downloads to
 throwaway directories. **Always set `MIMICK_CONFIG_DIR` when running the app
 under test**, or the test overwrites the settings you actually use — including
 the notes-panel filters, which makes the notes column look broken.
+
+`tools/check_caret.py` opens a document offscreen, sends real key events, and
+checks where the cursor and the selection end up. It found the end-of-line case
+the first time it ran -- see `PageView.caret_trailing`.
 
 `tools/check_reading.py` runs the layout analysis over a PDF or a folder and
 reports the share of words it would read plus any sentences that look stitched
@@ -274,6 +342,12 @@ highlighting, since Mimick cannot highlight inside someone else's browser.
 
 ## Further out
 
+- **Mimick in a browser** — a static page on GitHub Pages instead of an
+  installed app: one link, every operating system, nothing to install. Blocked
+  on one question, which is whether Piper's voices can carry the whole app on
+  their own at 4--5x, because a web page cannot reach Microsoft's voices the way
+  `edge-tts` does. See [`FUTURE-FEATURES.md`](FUTURE-FEATURES.md) for what
+  survives the move, what does not, and the build order.
 - **EPUB support** — many university readings arrive as EPUB.
 - **Pronunciation dictionary** — for names and technical terms the voice
   mangles. Especially useful for academic reading.
