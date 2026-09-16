@@ -414,24 +414,30 @@ reading real documents; the rest were asked for:
   in the main window (trap 16 for why that is not wired through `changed`).
   `tools/check_voices.py` is new and covers both.
 
-**Nothing above is committed.** It is all sitting in the working tree on
-`main`, which is where Kat wanted it until she has used it. `git status` shows
-thirteen modified files and one new one:
+**All of it is now up, and waiting to be merged.** It went to the branch
+`reader-and-voice-list` as one commit on 16 September, and is open as
+<https://github.com/kathollander/mimick/pull/2> against `main` -- a pull
+request rather than a commit straight to `main`, the way v0.2.0 went. Nothing
+is on `main` yet, so a fresh clone still gets v0.2.0. What went up:
 
 | Changed | Why |
 | --- | --- |
 | `mimick/layout.py` | Footnotes, the block-splitting pre-pass, the stranded footer |
 | `mimick/document.py` | The footnote switch, and the cursor's movement helpers |
 | `mimick/citations.py` | More citation shapes |
-| `mimick/ui/main_window.py` | The footnote menu item, and every cursor key |
+| `mimick/ui/main_window.py` | The footnote menu item, every cursor key, and the voice box's nicknames |
 | `mimick/ui/page_view.py` | The cursor itself: state, painting, blink, focus |
-| `mimick/ui/theme.py`, `shortcuts_dialog.py`, `export_dialog.py`, `config.py` | A colour, the key list, the export pass-through, one default |
+| `mimick/ui/voices_dialog.py` | The list that keeps your place, and renaming a voice |
+| `mimick/config.py` | `voice_nicknames`, and one default |
+| `mimick/ui/theme.py`, `shortcuts_dialog.py`, `export_dialog.py` | A colour, the key list, the export pass-through |
 | `tools/check_caret.py` | **New.** Drives the cursor with real key events |
+| `tools/check_voices.py` | **New.** Drives the voice list against a stand-in catalogue |
 | `docs/FUTURE-FEATURES.md` | **New.** The browser-port question, and what decides it |
 | `README.md`, `docs/ROADMAP.md`, `docs/HANDOFF.md`, `.gitignore` | Kept in step |
 
-When it does go up: a branch, not a commit straight to `main` — v0.2.0 went
-through a pull request and there is no reason to stop.
+It is one commit rather than several because the three files that carry both
+bodies of work cannot be split without leaving a commit where the cursor
+exists and no key reaches it.
 
 **What has not been checked by hand.** Everything above was tested offscreen,
 with synthesized mouse events for the dragging and the ×. **Nobody has yet
