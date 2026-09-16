@@ -159,6 +159,35 @@ def check_dialog(settings: Settings) -> None:
     dialog.nickname_edit.setText("Delta")
     dialog._set_nickname()
     check("typing the real name stores no nickname", settings.nickname(NAMED) == "")
+
+    print("What the status line says")
+    settings.set_nickname(NAMED, "Warm one")
+    dialog._refill()
+    pick(tree, "en_GB-alan-medium")
+    pick(tree, NAMED)
+    check("a nicknamed voice says what it came with",
+          dialog.status.text() == f"Warm one is your name for Delta \u00b7 {NAMED}",
+          dialog.status.text())
+
+    pick(tree, "en_GB-alan-medium")
+    check("a voice with no nickname puts the summary back",
+          dialog.status.text() == "4 voices shown \u00b7 1 installed",
+          dialog.status.text())
+
+    # Trap 15 again: filling the tree walks the selection down every row, so a
+    # line written on a selection change must not be written by a refill.
+    pick(tree, NAMED)
+    dialog._refill()
+    check("a refill says the summary, not whichever voice it passed",
+          dialog.status.text() == "4 voices shown \u00b7 1 installed",
+          dialog.status.text())
+
+    # The order the preview actually uses: refill first, then its own line.
+    dialog._refill()
+    dialog.status.setText("a line about the preview")
+    check("so the preview's line still stands after one",
+          dialog.status.text() == "a line about the preview", dialog.status.text())
+    settings.set_nickname(NAMED, "")
     dialog.deleteLater()
 
 

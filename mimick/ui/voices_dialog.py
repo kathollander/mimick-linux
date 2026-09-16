@@ -107,6 +107,7 @@ class OfflineVoicesDialog(QDialog):
         # part typed.
         self._nickname_key: str | None = None
         self._filling = False
+        self._shown = self._installed = 0
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 18, 20, 16)
@@ -319,10 +320,8 @@ class OfflineVoicesDialog(QDialog):
             self.tree.addTopLevelItem(item)
 
         count = self.tree.topLevelItemCount()
-        self.status.setText(
-            f"{count} voice{'s' if count != 1 else ''} shown · "
-            f"{len(installed)} installed"
-        )
+        self._shown, self._installed = count, len(installed)
+        self.status.setText(self._list_summary())
         if count:
             self._select(keep)
             if keep and self._current_key() == keep:
@@ -360,7 +359,37 @@ class OfflineVoicesDialog(QDialog):
     def _voice_picked(self) -> None:
         """A different voice is picked out, so the box shows that one's name."""
         self._show_nickname()
+        self._say_which_voice()
         self._refresh_buttons()
+
+    def _list_summary(self) -> str:
+        shown, installed = self._shown, self._installed
+        return (f"{shown} voice{'s' if shown != 1 else ''} shown · "
+                f"{installed} installed")
+
+    def _say_which_voice(self) -> None:
+        """Name the voice under a nickname, for whoever gave it one.
+
+        A name of your own is the only thing in the list that hides what the
+        voice is actually called, so picking one out says so. Voices with no
+        nickname hide nothing, and put the list's own summary back rather than
+        leaving the last voice's line standing.
+
+        Only ever from a selection the reader made. A refill is not one: it
+        walks the selection down the whole list as it fills, and the status
+        line it writes itself is the summary anyway. Writing this line from
+        `_refill` as well put it over the top of the preview's line -- trap 15
+        in its third guise.
+        """
+        if self._filling:
+            return
+        key = self._current_key()
+        nickname = self._nickname(key or "")
+        if not key or not nickname:
+            self.status.setText(self._list_summary())
+            return
+        self.status.setText(f"{nickname} is your name for "
+                            f"{self._current_person()} · {key}")
 
     def _show_nickname(self) -> None:
         """Put the selected voice's nickname in the box.
@@ -481,8 +510,10 @@ class OfflineVoicesDialog(QDialog):
             return
         if piper.is_installed(key):
             piper.remove(key)
-            self.status.setText(f"Removed {key}")
             self._refill()
+            # After the refill, not before: the refill writes a status line of
+            # its own, and it used to wipe this one out immediately.
+            self.status.setText(f"Removed {key}")
             self.changed.emit()
             return
 

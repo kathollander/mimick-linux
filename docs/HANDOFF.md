@@ -469,7 +469,16 @@ with no button to fix it. `PhraseRow`, `SampleFetcher` and the chip styling in
 `theme.py` are gone with all of it, and `piper.cached_sample_count` and
 `piper.clear_samples` have no callers left -- the sample cache still fills
 itself in `~/.cache/mimick/piper-samples/`, and nothing in the window mentions
-it now. Naming by clicking a voice's name a second time,
+it now.
+
+Picking out a voice you have named says what it came with --
+`Warm one is your name for Delta · en_GB-delta-medium` -- because a name of
+your own is the only thing in the list that hides what the voice actually is.
+`_say_which_voice` runs on a selection the reader made and **not** from
+`_refill`: a refill walks the selection down every row as it fills, and its own
+status line is the summary, so writing this one there put it over the top of
+the preview's line. Trap 15 in its third guise. The same edit moved `_act`'s
+`Removed X` to after its refill, where it survives. Naming by clicking a voice's name a second time,
 or with F2, is gone: it was easy to trigger by accident and easy to miss on
 purpose, and nothing in the list takes typing now. Nicknames are shown in
 italics, which is the only signal that a name is one the reader gave. The
