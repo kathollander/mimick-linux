@@ -149,6 +149,20 @@ QFrame#MarkupBar[home="top"], QFrame#MarkupBar[home="bottom"] {{
     border-right: none;
 }}
 QFrame#MarkupBar QLabel {{ color: {TEXT_DIM}; font-size: 15px; }}
+/* Dragged over a home it docks in: snapped there, outlined, and labelled. */
+QFrame#MarkupBar[preview="true"] {{
+    background: {PANEL};
+    border: 2px dashed {ACCENT};
+    border-radius: 6px;
+}}
+QLabel#DockLabel {{
+    background: {ACCENT};
+    color: #ffffff;
+    font-size: 12px;
+    font-weight: 600;
+    padding: 3px 10px;
+    border-radius: 10px;
+}}
 
 /* The row that formats the sticky note being typed in (sticky_note.py). */
 QWidget#StickyFormat QToolButton {{ padding: 2px 6px; min-width: 16px; border-radius: 6px; }}

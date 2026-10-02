@@ -72,7 +72,8 @@ def main() -> int:
     check("its colour sits beside it, not on the formatting row",
           window.sticky_colour_button.isVisible()
           and window.sticky_colour_button.parent() is window.add_sticky_button.parent()
-          and not hasattr(window.sticky_format, "colour"))
+          and not hasattr(window.sticky_format, "colour")
+          and not window.sticky_colour_button.icon().isNull())
     row = window.sticky_format
     check("in the panel the formatting row fills the bar's width",
           window.markup_bar.home == "panel" and row.width() >= window.add_note_button.width() - 2,
@@ -135,7 +136,7 @@ def main() -> int:
     check("Ctrl+B outside a sticky still hides the notes panel", not view.notes_visible)
     check("…and the bar goes with it, still at home in the panel",
           window.markup_bar.home == "panel" and not window.markup_bar.isVisible()
-          and window.settings.get("markup_home") == "panel")
+          and window.settings.get("markup_place") == "panel")
     QTest.keyClick(window, Qt.Key.Key_B, CTRL)
     settle(app)
     check("…and comes back with it", view.notes_visible and window.markup_bar.isVisible())
@@ -154,6 +155,39 @@ def main() -> int:
     settle(app)
     check("Ctrl+Shift+H with the bar in a closed panel opens the panel",
           view.notes_visible and window.markup_bar.isVisible() and window.act_annotation_bar.isChecked())
+
+    print("Dragging the bar")
+    # Kat, 1 October: it was unclear that the right-hand side docks it. Over a
+    # home it docks in, it snaps there in that home's shape, labelled.
+    bar, viewport = window.markup_bar, view.viewport()
+    QTest.mousePress(bar.grip, Qt.MouseButton.LeftButton)
+    settle(app)
+    bar._drag_to(viewport.mapToGlobal(QPoint(viewport.width() // 3, viewport.height() // 2)))
+    settle(app)
+    label = bar._label
+    check("dragged over the page it is loose, with no label", bar.property("preview") is not True
+          and (label is None or not label.isVisible()))
+    gutter = view.notes_gutter_rect()
+    bar._drag_to(viewport.mapToGlobal(QPoint(viewport.width() - 4, viewport.height() - 80)))
+    settle(app)
+    label = bar._label
+    check("at the far right, low down, it snaps into the notes column's shape",
+          bar.property("preview") is True and bar.x() == gutter.left() and bar.width() == gutter.width()
+          and bar.y() < viewport.height() // 3, (bar.geometry(), gutter))
+    check("…labelled", label is not None and label.isVisible() and "notes panel" in label.text())
+    if shot:
+        window.grab().save(shot.replace(".png", "-dock-panel.png"))
+    bar._drag_to(viewport.mapToGlobal(QPoint(viewport.width() // 3, 10)))
+    settle(app)
+    check("near the top it snaps across the top", bar.property("preview") is True and bar.y() == 0
+          and bar.width() == viewport.width() and "across the top" in label.text(), bar.geometry())
+    if shot:
+        window.grab().save(shot.replace(".png", "-dock-top.png"))
+    QTest.mouseRelease(bar.grip, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier,
+                       bar.grip.mapFromGlobal(viewport.mapToGlobal(QPoint(viewport.width() - 4, viewport.height() - 80))))
+    settle(app)
+    check("let go at the right, it is back in the panel", bar.home == "panel" and bar.isVisible()
+          and not label.isVisible() and bar.property("preview") is not True, bar.home)
 
     print("Moving, deleting, undoing")
     before = tuple(item.rect)

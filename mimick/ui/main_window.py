@@ -8,7 +8,7 @@ from pathlib import Path
 import pymupdf
 import sounddevice as sd
 
-from PySide6.QtCore import (QCoreApplication, QEvent, QEventLoop, QPoint, Qt, QThread,
+from PySide6.QtCore import (QCoreApplication, QEvent, QEventLoop, QPoint, QRect, Qt, QThread,
                             QTime, QTimer, Signal, Slot)
 from PySide6.QtGui import QAction, QActionGroup, QCursor, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
@@ -464,6 +464,7 @@ class MainWindow(QMainWindow):
         self.sticky_format.setObjectName("StickyFormat")
         self.sticky_format.format_requested.connect(self._apply_sticky_format)
         self._sticky_colour = STICKY_COLOUR
+        self.sticky_colour_button.setIcon(colour_swatch(STICKY_COLOUR, 14, square=True))
 
         self.markup_bar = MarkupBar(self.page_view.viewport())
         # Add note first, Highlight under it: writing is what the panel is for.
@@ -953,7 +954,10 @@ class MainWindow(QMainWindow):
         """Restore the display choices from last time."""
         self._markup_shown = bool(self.settings.get("show_annotation_bar", True))
         self.act_annotation_bar.setChecked(self._markup_shown)
-        self._place_markup_bar(str(self.settings.get("markup_home", "panel")))
+        # A new key on 1 October: until then hiding the notes panel moved the bar
+        # to the top and saved that, so settings held a "top" nobody chose.
+        # Everyone starts back in the panel once (Kat, 1 October).
+        self._place_markup_bar(str(self.settings.get("markup_place", "panel")))
 
         self._set_card_filter(
             quotes=bool(self.settings.get("panel_shows_quotes", True)),
@@ -3024,6 +3028,23 @@ class MainWindow(QMainWindow):
         """The notes column, for the markup bar to aim a drop at."""
         return self.page_view.notes_gutter_rect()
 
+    def markup_dock_rect(self, home: str) -> QRect | None:
+        """Where the markup bar sits in a docked home, in the page view's
+        viewport: its left edge, width and top (for "bottom", the bottom). The
+        bar snaps there while dragged over it, to show where it will go."""
+        view = self.page_view.viewport()
+        if home == "panel":
+            gutter = self.page_view.notes_gutter_rect()
+            if gutter.isEmpty():
+                return None
+            top = self.notes_header.y() + self.markup_slot.geometry().y()
+            return QRect(gutter.left(), top, gutter.width(), 0)
+        if home == "top":
+            return QRect(0, 0, view.width(), 0)
+        if home == "bottom":
+            return QRect(0, view.height(), view.width(), 0)
+        return None
+
     def _place_markup_bar(self, home: str, point: QPoint | None = None,
                           announce: bool = False) -> None:
         """Move the bar to one of its four homes and remember it was there."""
@@ -3057,7 +3078,7 @@ class MainWindow(QMainWindow):
         self.markup_bar.setVisible(self._markup_shown)
         self.page_view.refresh_panel_widgets()
 
-        self.settings.set("markup_home", home)
+        self.settings.set("markup_place", home)
         if home == "float":
             spot = self.markup_bar.pos()
             self.settings.set("markup_point", [spot.x(), spot.y()])

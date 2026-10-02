@@ -17,7 +17,10 @@ So both buttons are one widget now, and that widget has four homes:
 Drag it by the grip at its leading edge. Dropping it near the top or bottom
 edge of the reading area snaps it there; dropping it over the notes column puts
 it back in the panel; anywhere else leaves it floating. Where it was left is
-remembered in settings.
+remembered in settings. While it is dragged over one of the three docked homes
+it snaps there in the shape it will have, outlined, with a label saying what
+letting go does (Kat, 1 October: it was unclear that the right-hand side docks
+it).
 
 Qt has a perfectly good QToolBar that does three of these four for free, and it
 was the first thing tried. It cannot do the fourth: a QToolBar docks to the
@@ -33,6 +36,12 @@ from PySide6.QtCore import QPoint, QRect, Qt, Signal
 from PySide6.QtWidgets import (
     QFrame, QHBoxLayout, QLabel, QVBoxLayout, QWidget,
 )
+
+# What letting go does, shown under the bar while it is snapped to a home.
+DOCK_LABELS = {"panel": "Let go to put it in the notes panel",
+               "top": "Let go to put it across the top",
+               "bottom": "Let go to put it across the bottom"}
+_ANY_WIDTH = 16777215                    # QWIDGETSIZE_MAX
 
 # How close to an edge counts as aiming at it. Generous, because the bar is
 # dragged by a grip a few pixels wide and nobody aims precisely with one.
@@ -72,6 +81,8 @@ class MarkupBar(QFrame):
         self.setProperty("home", "panel")
         self._drag_from: QPoint | None = None
         self._buttons: list[QWidget] = []
+        self._previewing = "float"
+        self._label: QLabel | None = None
 
         self.grip = _Grip(self)
         self.grip.installEventFilter(self)
@@ -186,9 +197,53 @@ class MarkupBar(QFrame):
         if stage is None or self._drag_from is None:
             return
         local = stage.mapFromGlobal(global_point)
-        self.move(local - self._drag_from - self.grip.pos())
-        self.raise_()
         self._preview(local)
+        aim = self._aim(local)
+        place = getattr(self.window(), "markup_dock_rect", None)
+        target = place(aim) if place is not None and aim != "float" else None
+        self._snap(aim if target is not None else "float", target)
+        if target is None:
+            self.move(local - self._drag_from - self.grip.pos())
+        self.raise_()
+
+    def _snap(self, aim: str, target: QRect | None) -> None:
+        """Take the shape of the home a drop here would give it, and sit there;
+        or, with ``aim`` "float", go back to a loose strip under the pointer.
+        ``target`` gives the left edge, width and top (or, for "bottom", the
+        bottom) to sit at, in the stage's coordinates."""
+        if aim != self._previewing:
+            self._previewing = aim
+            self.setProperty("preview", aim != "float")
+            self.style().unpolish(self)
+            self.style().polish(self)
+            self._rebuild_layout(vertical=aim == "panel")
+            if aim == "float":
+                self.setMinimumWidth(0)
+                self.setMaximumWidth(_ANY_WIDTH)
+                self.adjustSize()
+        if aim == "float" or target is None:
+            if self._label is not None:
+                self._label.hide()
+            return
+        self.setFixedWidth(target.width())
+        self.adjustSize()
+        top = target.top() - self.height() if aim == "bottom" else target.top()
+        self.move(target.left(), top)
+        label = self._dock_label()
+        label.setText(DOCK_LABELS[aim])
+        label.adjustSize()
+        x = target.left() + (target.width() - label.width()) // 2
+        y = top - label.height() - 6 if aim == "bottom" else top + self.height() + 6
+        label.move(x, y)
+        label.show()
+        label.raise_()
+
+    def _dock_label(self) -> QLabel:
+        if self._label is None:
+            self._label = QLabel(self._stage())
+            self._label.setObjectName("DockLabel")
+            self._label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        return self._label
 
     def _preview(self, local: QPoint) -> None:
         """Say what a drop here would do, in the tooltip-free way: the cursor."""
@@ -208,8 +263,10 @@ class MarkupBar(QFrame):
             return "float"
         gutter = getattr(self.window(), "notes_gutter_rect", None)
         if gutter is not None:
+            # The whole right-hand column, and a little short of it, is the
+            # panel: it is a side of the window, not a target to hit exactly.
             area: QRect = gutter()
-            if area is not None and area.contains(local):
+            if area is not None and not area.isEmpty() and local.x() >= area.left() - SNAP_MARGIN // 2:
                 return "panel"
         if local.y() <= SNAP_MARGIN:
             return "top"
@@ -223,5 +280,6 @@ class MarkupBar(QFrame):
             return
         local = stage.mapFromGlobal(global_point)
         aim = self._aim(local)
+        self._snap("float", None)
         self.home_changed.emit(aim, self.pos() if aim == "float" else QPoint())
 
