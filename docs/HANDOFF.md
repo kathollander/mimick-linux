@@ -1,0 +1,728 @@
+# Handoff
+
+Everything a fresh session needs to pick Mimick up. Written 11 September 2026,
+the evening the project was built; updated 12 September, the day it was
+published and v0.2.0 released, and again on 16 September after ten changes to
+the reader itself, which are on a branch and in an open pull request rather
+than on `main` -- see **Where it stands**. Last updated late on 16 September,
+after the browser version gained highlights and notes.
+
+## Releasing -- read first (17 September 2026)
+
+Kat means to release in a fresh session. Two things could be released, and
+they are separate: **the desktop app** (pull request #2, then a tag) and **the
+browser version** (its first publication). Ask Kat which, or both, before
+doing anything outward-facing. What stands where:
+
+**The desktop app** -- branch `reader-and-voice-list`, pull request
+<https://github.com/kathollander/mimick/pull/2>.
+
+- **22 commits are local only** (count them with `git log origin/reader-and-voice-list..`). `git push` from this branch adds them to the
+  pull request. Nothing since `137193c` is on GitHub.
+- Kat said on 16 September not to merge until her further changes were in;
+  on 17 September she said it is ready. Confirm, then merge with the button on
+  the pull request, and tag (`v0.3.0` is the obvious next) as v0.2.0 was --
+  see **v0.2.0 is released** below, including checking the tag from a clean
+  export rather than the working tree.
+- Release notes need writing: footnotes, the text cursor, reading order fixes,
+  exact word timing, 5× that means it, the voices window, shortcuts that fit a
+  browser, the faster scan opening (trap 18), the footnote plan fix. `git log
+  v0.2.0..` has the rest.
+- **Never checked by hand** (see **What has not been checked by hand**): 4-5×
+  by ear, dragging the markup bar, the text cursor from a real keyboard, the
+  voices window. Worth asking Kat whether she has. Windows is still unrun.
+- `ROADMAP.md`, **Before the next release**, has the standing list; none of it
+  was treated as blocking for v0.2.0.
+- Every check tool passes as of this writing.
+
+**The browser version** -- `../mimick-web`, which has no remote at all.
+
+- **Blocking: the voice licences.** Unchecked; item 0 of **Next** in
+  `../mimick-web/docs/HANDOFF.md` says exactly what to find out. Do it before
+  publishing.
+- **Blocking: delete `../mimick-web/sample readings/`** before the repository
+  goes public. It is Kat's own documents. It is git-ignored and has never been
+  committed (checked: no mention in any commit), so deleting the folder is
+  enough.
+- `docs/TESTING DONE.txt` there is Kat's; never commit it.
+- Kat creates the GitHub repository herself. The largest file is 17.5 MB (the
+  PyMuPDF wheel), under GitHub's limits; `.git` is 41 MB.
+- Hosting has to send cross-origin isolation for threaded voices;
+  `coi-serviceworker.js` does it from the page, which is what makes a plain
+  static host (GitHub Pages, say) possible. Not yet tried on any real host.
+- Most of Kat's checklist in its `docs/TESTING.md` is unticked: reading order,
+  voices, MP3, reading time, highlights and notes, and the rest added on 16-17
+  September.
+- Every check tool there passes as of this writing (`HANDOFF.md`, **Running it**).
+
+## What Mimick is
+
+A PDF reader that reads aloud in natural voices, highlighting each word as it
+speaks it. It exists because Linux had no equivalent of Edge's Read Aloud; it
+runs on Windows as well as of v0.2.0. Written by Claude Code, arranged by Kat Hollander
+([github.com/kathollander](https://github.com/kathollander)). AGPL-3.0, because
+MuPDF is.
+
+Read [`../README.md`](../README.md) first — it is the user-facing description
+and is kept accurate. Then [`ROADMAP.md`](ROADMAP.md) for what is planned and
+the traps in this codebase.
+
+## Running it
+
+```bash
+./install.sh                 # venv + deps + desktop entry; safe to re-run
+.venv/bin/python -m mimick "Testing/Big Ideas from Atleo and Boron 2022.pdf"
+```
+
+A fresh clone's `Testing/` has only that one document in it; the two-column
+paper most of the reading work was done against is not ours to redistribute.
+Any two-column PDF will do, and it is worth having one — a single-column
+document exercises none of that code.
+
+That second line only works **from the project folder** -- see trap 10. To
+exercise what a user actually gets, run the installed launcher from somewhere
+else:
+
+```bash
+cd ~ && ~/.local/bin/mimick
+```
+
+**Always set `MIMICK_CONFIG_DIR` when testing**, or the test overwrites the
+settings actually in use:
+
+```bash
+QT_QPA_PLATFORM=offscreen MIMICK_CONFIG_DIR=/tmp/mimick-test \
+    .venv/bin/python tools/check_shortcuts.py
+QT_QPA_PLATFORM=offscreen MIMICK_CONFIG_DIR=/tmp/mimick-test \
+    .venv/bin/python tools/check_caret.py
+QT_QPA_PLATFORM=offscreen MIMICK_CONFIG_DIR=/tmp/mimick-test \
+    .venv/bin/python tools/check_voices.py
+.venv/bin/python tools/check_timing.py      # needs en_US-lessac-low downloaded
+.venv/bin/python tools/check_reading.py Testing/
+```
+
+## How it fits together
+
+| File | Holds |
+| --- | --- |
+| `mimick/system.py` | Every platform difference: folder locations, ffmpeg, console-window suppression. |
+| `mimick/document.py` | PDF → words → sentences. Word order, hyphen rejoining, run breaking. `align_marks`, which puts the voice's words onto the page's. |
+| `mimick/layout.py` | Recursive XY-cut. Decides which regions are body, aside, furniture or footnote. |
+| `mimick/citations.py` | Regexes for in-text citations, so `[51]` is not read aloud. |
+| `mimick/speech.py` | Cleanup before the voice: ligatures, stranded accents, masthead and declarations. |
+| `mimick/player.py` | Playback: prefetch queue, transport. |
+| `mimick/engines/` | `edge.py` (online, word timings), `piper.py` (offline), `timing.py` (Piper's exact word timings), `kokoro.py`. |
+| `mimick/export.py` | MP3 conversion; streams PCM to a temp file, two workers. |
+| `mimick/annotations.py` | Highlights and notes as real PDF annotations. Also where a document's notes get written, and how. |
+| `mimick/ui/page_view.py` | The canvas: its own scroll area, page cache, notes panel, plan overlay. The panel scrolls separately from the page. |
+| `mimick/ui/markup_bar.py` | Highlight and Add note, and the four places they can be dragged to. |
+| `mimick/ui/main_window.py` | Everything else. The big one. |
+| `mimick/ui/voices_dialog.py` | The offline-voice catalogue: the list, previews, and the nicknames a reader gives a voice. |
+| `tools/` | `check_shortcuts.py`, `check_reading.py`, `check_caret.py`, `check_voices.py`, `check_timing.py`. Run all five after changes. |
+
+**The reading pipeline**, in order: `layout._text_blocks` splits any MuPDF block
+that is really two columns side by side → `layout.analyse` cuts each page into
+regions and labels them, then marks the footnotes and the reference list and
+everything after it →
+`Document._build_sentences` walks regions in reading order, taking words from
+readable ones and passing each through `speech.normalise` → runs break at region
+boundaries, except where one region stops mid-sentence and the next starts
+mid-sentence, which is a column or a page carrying on → a run that is labelled
+boilerplate is dropped whole → `chunk_into_sentences` splits on punctuation, but
+never while a bracket is open, and drops runs that are not language →
+`citations.mark_words` plus a strip of the assembled text removes in-text
+citations.
+
+**Region order is the cut's order.** `layout.analyse` must not sort its regions
+by position afterwards — see trap 12. Word order follows region order, which is
+why `set_region_reads` can rebuild safely (trap 9).
+
+**There is one text pipeline, not two.** Live reading and MP3 conversion both
+consume `Document.sentences`; the export dialog filters that list by page range,
+and, when its cleanup checkbox disagrees with the open document, takes the list
+from a second `Document` opened the other way and closed again by
+`ExportDialog.release()` (a `Sentence` holds only strings and rectangles, so it
+outlives the PDF it came from). Anything done to the spoken text therefore has to be done in
+`document.py` or below, never in `export.py`, or the two paths drift. The
+`clean_text` setting (**Display → Clean up text for reading**) and
+`skip_citations` both gate behaviour inside `Document` for exactly that reason.
+Reading a *selection* goes through `Document.sentences_from_range`, which is
+easy to forget — it silently ignored citation skipping until it was fixed.
+
+**Notes are never written into the document you opened.** They go to a
+companion file, `<name> (notes).pdf`, beside it -- or, if that folder is
+read-only, to `~/.config/mimick/notes/`. Opening the original opens the
+companion when one exists, so `Document.path` is usually the companion and
+`companion_for` returns itself for it. `MainWindow._notes_path` is where this
+document's notes go; a debounced `QTimer` writes them a moment after each
+change, and `_update_enabled` is the single place that notices there is
+something to write. `AnnotationStore.save_as` is the only writer: whole PDF to a
+temporary file, verified, then `os.replace`. Never reintroduce `saveIncr` --
+trap 11 explains what it costs.
+
+## Traps that cost real time tonight
+
+**1. PySide6 delivers worker signals on the worker thread.** A plain function, a
+bound method, and a `@Slot`-decorated method with `Qt.QueuedConnection` all ran
+inside the worker. Calling `QThread.wait()` from such a handler deadlocks
+outright — the app froze mid-conversion. The export uses
+`QCoreApplication.postEvent` with a custom `ExportEvent`, which Qt *does*
+guarantee lands in the receiving object's thread. **Reuse that pattern for any
+new worker.**
+
+**2. `QDialog.close()` routes through `reject()`.** `ExportProgressDialog`
+overrode `reject()` to mean *cancel*, so closing it on completion only asked it
+to stop and left it on screen saying "Stopping…". Every exit now goes through
+`finish()`, which sets a flag first.
+
+**3. String literals are inconsistent about escapes.** Some hold `…`
+literally, others the character `…`. Pattern-matching on those fails *silently*
+— three separate edits tonight appeared to succeed and did nothing, once
+leaving a method with a line deleted and its replacement never written.
+**Read the actual bytes first, assert that the pattern matched, and prefer
+line-anchored edits.**
+
+**4. Do not size a widget to the whole document.** Sixty pages is ~64,000px,
+past where Qt coordinates behave. `PageView` is a `QAbstractScrollArea` that
+paints only the visible band.
+
+**5. `_ends_sentence` must strip punctuation from both ends.** It only stripped
+trailing punctuation, so `"(p."` did not match the abbreviation `p` and the
+splitter cut `(p. 21)` in half — 45 times in a 12-page paper. The voice said
+"pee" and the page number was lost. Relatedly, `citations.mark_words` matches a
+word that *begins* inside a citation rather than one wholly contained by it,
+because `"21)."` reaches a character past the closing bracket.
+
+**6. A dead playback thread is silent, not loud.** `align_marks` used `spoken`
+as both the list of words and the loop variable over `clip.marks`, so
+`spoken[offset][1]` indexed a single character and raised `IndexError` on the
+first word of the first sentence. That killed the `mimick-play` thread before a
+sample reached the speakers: no sound, no dialog, no clue. `Player._run`
+swallows nothing, but nothing watches the thread either. **When playback does
+nothing, drive `Player` directly from a script** — the traceback prints there,
+where it never reaches the interface.
+
+**7. `Player.configure` must clamp the playhead.** It replaces the sentence list
+without touching `_index`, and a rebuild can shrink that list by a quarter.
+`_run`'s `while self._index < len(self._sentences)` then exits at once — silent
+again. It now clamps; callers that rebuild should still hold the reader's place
+by *word* index, as `_toggle_clean_text` does, because sentence numbers mean
+nothing across a rebuild.
+
+**8. `VoiceLoader` is deleted out from under its own attribute.**
+`loader.finished.connect(loader.deleteLater)` leaves `self._voice_loader`
+pointing at a wrapper whose C++ object is gone, and any call on it raises
+`RuntimeError: Internal C++ object already deleted`. The reference is cleared on
+`finished` now, and `closeEvent` guards anyway.
+
+**9. Word indices must stay stable.** Annotations store `first_word`/`last_word`.
+Word order comes from region order, which does not change when a region is
+included or excluded — that is why `set_region_reads` can rebuild safely. The
+same rule is why `speech.normalise` may rewrite a word but must never drop one:
+`clean_text` would otherwise shift every index after the first word it removed,
+and the export dialog could not reuse a selection made against the open
+document. Both builds give 8,395 words with identical rectangles.
+
+**10. The applications-menu launcher is not the terminal launcher.**
+`python -m mimick` resolves the package through the *working directory*. In a
+terminal that is the project folder, so it works; from the menu it is `$HOME`,
+so it died instantly with `No module named mimick` and no window -- the app
+simply did not open. The package is not installed into the venv (there is no
+`pyproject.toml`), so both installers write a `mimick.pth` file into the venv's
+site-packages naming the project folder. `install.sh` used to set `PYTHONPATH`
+in its launcher instead, until 16 September. Either way, not `cd`-ing keeps a
+relative filename argument resolving against wherever the user actually is. **Test the installed launcher
+from `$HOME`, not from the project folder** -- from the project folder the bug
+is invisible.
+
+**11. Never save a PDF incrementally on a timer.** `saveIncr` appends a
+revision to whatever is on disk and is silently wrong if that file is not
+byte-for-byte what the document was opened from. The result points its `/Prev`
+at itself, so the chain never reaches the original objects: Mimick refuses the
+file outright, Okular repairs it and shows the first revision only, and every
+note after the first save looks lost. It is not lost -- patch `/Prev` to the
+previous xref offset and it all comes back -- but nobody knows that at the
+time. Saves now write the whole PDF to a temporary file, check it opens with
+the right pages and highlights, and `os.replace` it into place. Documents are
+opened from bytes, not a path, so that replace is safe even when the file being
+replaced is the one being read.
+
+**12. Region order is not the order regions are in.** `layout.analyse` ran the
+XY-cut, which produces regions in reading order, and then sorted them by top
+edge -- which on a two-column page reads across instead of down, because the
+foot of the left column is below the head of the right one. If you touch the
+layout, keep the cut's order. The same rule is why `_pages_on_screen` exists in
+`page_view`: the render margin draws a page either side of the visible band,
+which is right for pixmaps and wrong for anything that must match what the
+reader is looking at.
+
+**13. No voice engine speaks much faster than 2×, and none of them say so.**
+Edge's service clamps `prosody rate` at +100%: ask for 2×, 3× or 6× and the
+audio that comes back is byte-identical. Kokoro clamps its `speed` outright.
+Piper's `length_scale` compresses phonemes but not the pauses between them, so
+6× asked for yields about 2.6× heard. None of this raises anything — the speed
+box said 3× and gave 2× for a year. Anything above `Engine.max_native_rate` is
+now taken out of the rendered audio by ffmpeg `atempo` in `Engine.render`, with
+`Clip.marks` divided by the same factor. **Call `render`, never `synthesize`**,
+or that sentence comes out at the engine's own pace while every other sentence
+is at the reader's.
+
+**14. A widget cannot be taken out of a layout by re-parenting it.** The markup
+bar moves between four hosts, and `setParent` alone leaves the old layout still
+holding it: it reappears where it was the next time anything re-lays out.
+`_place_markup_bar` calls `removeWidget` on every host it might be in first.
+The matching trap is on the other side — a `QLayout` cannot be swapped while it
+is installed, so `MarkupBar._rebuild_layout` hands the old one to a throwaway
+`QWidget` to be destroyed with it rather than emptying it in place.
+
+**15. Rebuilding a list throws away where the reader was.**
+`OfflineVoicesDialog._refill` clears the tree and refills it, and it runs after
+a *preview* as well as after a search — so listening to a voice put the
+selection back on the suggested one, in a list of 176, and there was no way to
+tell where you had got to. It now keeps the current key, the scroll position
+and the status line. The same call used to be made *after* the preview wrote
+its status line, silently wiping it. **Anything that refills a list the reader
+is working through has to put them back where they were.**
+
+**16. `changed` on the voices dialog means the voices changed.**
+`MainWindow._offline_voices_changed` switches the engine to Piper. Renaming a
+voice must therefore not emit it, or naming a voice would drag the reader off
+the online voices mid-document. The main window picks nicknames up by calling
+`_relabel_voices` when the dialog closes instead.
+
+**17. A tree being filled reports every row it is given as the current one.**
+The nickname box shows the picked-out voice's name, so it is written to when
+the selection moves -- and during a refill the selection appears to walk the
+whole list, which wiped a name half typed. Comparing keys is not enough on its
+own: `_filling` is held up across the rebuild, and the box is written once at
+the end. The same shape as trap 15, one layer in.
+
+**18. `get_text("dict")` copies out every image on the page.** Bytes and all,
+by default. `layout.py` asks for it twice a page and never looks at an image,
+and on a scanned book -- a full-page picture behind every page of text -- that
+was 138ms a call against 4ms without. A 598-page scan took 199s to open (258s
+in the browser, which looked like it had failed). `layout._TEXT_ONLY` leaves
+images out: 12s, identical reading. **Any new `"dict"` or `"rawdict"`
+extraction should pass it.** Test long documents with a scan among them; the
+journal articles in `Testing/` are all born-digital and never showed this.
+
+## The browser version
+
+**Started 16 September 2026, in its own repository.** `mimick-web` sits beside
+this folder, at `../mimick-web`. It is committed locally and **not yet on
+GitHub** -- creating the public repo is waiting on Kat. Nor are this repo's
+last commits pushed: everything after `63ec459` on `reader-and-voice-list` is
+local only, and joins pull request #2 on `git push`. The plan is in
+[`FUTURE-FEATURES.md`](FUTURE-FEATURES.md); what each step cost is in
+`mimick-web/docs/PORT-LOG.md`.
+
+**Step 1 is done and passes.** `layout.py`, `citations.py` and `speech.py` run
+under Pyodide unchanged and read the sample into the same 71 regions the desktop
+app does. `node tools/check_spike.mjs` there checks it exactly.
+
+Two rules that carry over from here:
+
+- **Work flows one way.** Fix the reading in *this* repo, then run
+  `tools/port.sh ../Mimick` in `mimick-web`. Never edit its `py/`. Since step
+  4a that includes `document.py`, which the browser runs unchanged -- so it
+  must not import anything but PyMuPDF and the three reading modules. Since
+  16 September, `annotations.py` too: the browser's highlights and notes are
+  its `AnnotationStore`. Keep it free of Qt and of anything a browser lacks;
+  its file-writing parts (`save_as`, companions) are simply not called there.
+- **PyMuPDF versions must match.** Pyodide bundles 1.26.3; this app is on
+  1.28.2, and the gap made twelve regions a character longer, silently. The web
+  version pins 1.28.2. **Bump both together**, then regenerate
+  `sample/expected-native.json` -- the command is at the top of
+  `check_spike.mjs`.
+
+**Seen in a real browser, and it matches.** On 16 September the spike page was
+served with `python3 -m http.server 8731` from `mimick-web` and **Run the
+spike** clicked in Chrome: Python ready in 2.4s, MuPDF in 1.3s, 12 pages
+analysed in 2.5s, 71 regions -- 37 body, 5 aside, 26 furniture, 3 references --
+the same count as the desktop app.
+
+**Claude in Chrome works.** Google Chrome 153 (the `.deb`, not the Brave or
+Chromium snaps, which the extension never installed in) with the Claude
+extension 1.0.93. Restarting Chrome after `/chrome` registered the native host
+was what it needed. One oddity: clicking a button by its element reference did
+nothing on the spike page, and clicking the same button by screen position
+worked.
+
+**Step 2 is done too.** A Piper voice runs in a Web Worker in `mimick-web`'s
+`voice.html`: 6.5× real time on 4 threads in Chrome here, 3.5× on one, so 4×
+holds when threaded. Two things from it touch this repo: the browser's
+espeak-ng says "four", "forty" and "ninety" a shade differently from
+piper-tts 1.8's, and the browser speeds speech up with its own stand-in for
+`atempo`. `mimick-web/docs/PORT-LOG.md` has the numbers; its `HANDOFF.md` has
+what is next.
+
+**Step 3 is done as well: word timings in the browser are exact.** Piper
+models know how long each phoneme lasts; Piper 1.8's own alignment patch
+exposes it, and `mimick-web/js/timing.js` turns that into word start times. Its
+check tool compares against the audio, and against this app's `estimate_marks`,
+which is out by up to 275 ms where the exact timing lands every word.
+
+**This app does the same now**, since 16 September: `mimick/engines/timing.py`
+is `timing.js` in Python, and `tools/check_timing.py` makes the same checks
+against the audio. It patches the model's bytes itself rather than using
+piper-tts's `include_alignments`, which would have added the `onnx` package to
+every install. About 13 ms a sentence. Kokoro still estimates. **From here the
+two copies of the timing code move together: change this one, then `timing.js`.**
+
+**Step 4 is done: the browser reader reads aloud.** 4a runs this repo's
+`document.py` in the browser unchanged. 4b, `mimick-web/reader.html`, opens and
+shows a PDF; Kat tested it. 4c reads aloud with one voice, lighting the word
+being said. Scanned books, whose pages take most of a second each to draw, are
+drawn ahead in the background and kept in the browser. `mimick-web/docs/HANDOFF.md`
+has what is next. Two desktop items at the bottom of
+`mimick-web/docs/TESTING.md` are still to be checked.
+
+**Later on 16 September the browser caught up on much of the desktop.**
+`mimick-web/docs/PARITY.md` lists every feature here and which the browser has:
+it now has right-click, selecting and the text cursor, highlights and notes
+(panel, movable strip, undo, Download a copy), the Display switches and Help.
+Reading order, the voice picker, reading while a long document opens, and MP3
+are next. Two things from that work touch this repo: `annotations.py` is ported
+and must stay browser-safe (see the rules above), and the browser's highlights
+are keyed to word indices exactly as here, so trap 9 now guards both.
+`mimick-web/docs/HANDOFF.md` has the detail and `TESTING.md` there has Kat's
+checklist.
+
+**17 September: the browser has Show reading order**, and building it found a
+small bug here, now fixed: the plan asked `region.reads`, so a footnote showed
+as skipped while **Read footnotes** was on, and clicking it did nothing you
+could see. `page_view` and `MainWindow` now ask `Document._region_reads`, as the
+build does.
+
+**Things the browser has that this app should get** are listed in
+`../mimick-web/docs/PARITY.md` under **For the desktop** -- first of them, as
+of 17 September, the reading-time estimate at the chosen speed (`ROADMAP.md`,
+**Next up**). The voice licences are being checked there too; they matter
+here as well, since this app offers every Piper voice.
+
+**This app draws scans slowly too.** A page of *Constructing meaning* takes
+0.6s here, on the main thread. The browser's fix -- draw ahead in a worker,
+keep the result -- would carry over to `page_view` if it bites.
+
+## Windows
+
+Added on 12 September 2026 and **not yet run on a real Windows machine** — it
+was written and reasoned through on Linux. Treat every claim below as designed
+rather than observed.
+
+`mimick/system.py` holds every platform difference; nothing else in the
+codebase should learn what operating system it is on. Three things differ:
+
+- **Folders.** `%APPDATA%\Mimick` for settings, `%LOCALAPPDATA%\Mimick\Cache`
+  for voices — 60 MB downloads have no business in a roaming profile.
+- **ffmpeg.** No system copy exists, so `install.ps1` downloads a static build
+  into the cache folder and `ffmpeg_command()` looks there as well as on `PATH`.
+- **Console windows.** Windows opens one for every child process of a windowed
+  app. `decode_audio` runs *once per sentence* during playback, so every ffmpeg
+  call passes `no_window_kwargs()` or a black box blinks on screen throughout
+  the reading. **Any new subprocess must pass it too.**
+
+**`install.ps1` avoids trap 10 with a `.pth` file** in the venv's
+site-packages naming the project folder, which makes `python -m mimick` resolve
+from any working directory -- the Start Menu shortcut, the terminal command and
+the "Open with" entry at once, with no wrapper. `install.sh` does the same
+since 16 September.
+
+Two Windows traps worth knowing before debugging an install:
+
+- **The Microsoft Store Python is a trap.** A zero-byte `python.exe` sits on
+  `PATH` and opens the Store instead of running. The installer tries the `py`
+  launcher first and ignores anything under `WindowsApps` for this reason.
+- **`pythonw.exe`, not `python.exe`,** for the shortcut and the file
+  association, or a console window sits behind Mimick the whole time it is open.
+
+The PowerShell can at least be checked from Linux, which caught two real
+problems. Download the PowerShell tarball, then:
+
+```bash
+pwsh -NoProfile -Command 'Invoke-ScriptAnalyzer -Path ./install.ps1 -Severity Error,Warning -ExcludeRule PSAvoidUsingWriteHost'
+```
+
+`[Parser]::ParseFile(...)` catches syntax errors, and much of the script's
+logic — the version gate, the here-strings, the uninstaller's `PATH` surgery —
+runs on Linux unchanged. Only the registry, `WScript.Shell` and the download
+genuinely need Windows.
+
+The dependencies are the one part that is not guesswork. Every requirement
+resolves to a Windows binary wheel, with no compiler needed, on Python 3.10
+through 3.14; 3.15 has no PySide6 yet. `piper-tts` 1.8 bundles `espeakbridge`
+and its espeak-ng data inside the wheel, so offline voices need nothing from
+the system. To re-check after a dependency bump:
+
+```bash
+.venv/bin/python -m pip install --dry-run --ignore-installed \
+    --only-binary=:all: --platform win_amd64 --python-version 3.13 \
+    --target /tmp/x -r requirements.txt
+```
+
+What is genuinely untested: the PowerShell itself beyond parsing and
+PSScriptAnalyzer, the ffmpeg download, the Start Menu shortcut, the registry
+entries, `asyncio.run` per sentence on a Proactor event loop in the Edge
+engine, and **audio latency**. That last one is the real risk — word-sync
+highlighting assumes the playhead matches what is audible, and if WASAPI buffers
+more deeply than ALSA the highlight will lag the voice. Only an ear can tell,
+and `sd.OutputStream` takes a latency hint if it turns out to.
+
+The branch has been sent to one Windows user. The two things worth asking
+anyone who runs it: **does the highlight keep up with the voice**, and **is
+there a console window** behind the app or flashing between sentences. Neither
+shows up in a check tool.
+
+## State on disk
+
+Paths below are Linux; on Windows `~/.config/mimick` is `%APPDATA%\Mimick` and
+`~/.cache/mimick` is `%LOCALAPPDATA%\Mimick\Cache`. `MIMICK_CONFIG_DIR` and
+`MIMICK_CACHE_DIR` override both on either platform.
+
+- `~/.config/mimick/settings.json` — voice, speed, zoom, reading positions,
+  per-document reading-order corrections, the names given to voices.
+- `~/.cache/mimick/piper/` — downloaded voices (~60 MB each).
+- `~/.cache/mimick/piper-samples/` — preview clips (~90 KB each).
+- `~/.cache/mimick/ffmpeg/` — Windows only; the copy `install.ps1` downloads.
+- `~/.config/mimick/notes/` — annotated copies for documents whose own folder
+  cannot be written to. Everything else gets its copy beside the original.
+
+## Where it stands
+
+Working and tested: reading with online and offline voices, word-sync
+highlighting, speed to 5×, selection reading, highlights and margin notes saved
+as PDF annotations, MP3 conversion with estimates and working cancellation,
+layout analysis with a visible editable reading order, citation skipping, and
+the reading cleanup — reference lists, masthead and declarations left out,
+ligatures and stranded accents repaired — switchable in **Display** and
+overridable for a single conversion in the Convert to MP3 window.
+
+Fixed on the 12th, all found by using the app rather than by reading it: read
+aloud produced no sound at all (trap 6), the applications-menu entry did not
+start (trap 10), citations split across a sentence boundary were half-spoken
+(trap 5), and the reference list was read out in full.
+
+Later on the 12th, again all found by use: two-column pages were read across
+rather than down (trap 12); citations naming several works, or with a comma
+tight against the name, were spoken; a sentence mentioning a website was
+dropped whole; `Ctrl`+`C` did nothing because it had never been written; note
+titles were cut off rather than wrapped; the notes panel stacked every visible
+page's cards into one list; there was no way to say "read from here" with
+click-to-read switched off. Notes now save themselves to a companion file --
+see trap 11 for the bug that found, and `annotations.save_as` for the shape a
+safe save has to take.
+
+**v0.2.0 is released.** Merged to `main`, tagged `v0.2.0`, and published at
+<https://github.com/kathollander/mimick/releases/tag/v0.2.0> on 12 September
+2026. `main` is now what anyone arriving at the repo gets, and it was checked
+by exporting the tag to a clean folder and running it from there rather than
+from the working tree. The release notes draft has been deleted, as planned.
+
+**Done on 14–15 September, unreleased.** Four pieces of work on the reader
+itself, all driven by using it rather than reading it:
+
+- **Speed goes to 5×, and now means it.** The old 3× was a fiction — see trap
+  13. Anything above an engine's honest ceiling is taken out of the rendered
+  audio by ffmpeg, in `Engine.render`.
+- **`Ctrl`+`Z` takes back a highlight or a note**, `Ctrl`+`Shift`+`Z` puts it
+  back. Steps find their annotation by PDF object, then by exact word span,
+  then by position — in that order, because undoing a deletion builds a new
+  annotation, and because two highlights can overlap.
+- **Highlight and Add note are one movable strip** (`mimick/ui/markup_bar.py`),
+  which can sit in the notes panel, across the top or bottom, or loose over the
+  page. This closed a real defect: Add note used to live inside the notes panel
+  header, so switching the notes column off took away the only way to write one.
+- **A highlight can be copied, read and removed directly.** `Ctrl`+`C` with
+  nothing selected copies the picked-out highlight and its note; right-click on
+  the page or on a card offers copy, read and delete; and a picked-out highlight
+  carries a small × in the page margin that removes it in one click.
+
+**Also done on 15--16 September.** Six more. The first three were found by
+reading real documents; the rest were asked for:
+
+- **Footnotes are labelled, and can be switched off** (**Display → Read
+  footnotes**). Detection wants three signals at once — a number at the start,
+  low on the page, in type smaller than the body — and then a sequence that
+  climbs. They are still read after the page rather than where they are
+  referred to; see `layout._mark_footnotes` for why that cannot be fixed
+  without cutting body text mid-sentence. The label is applied whichever way
+  the switch is set, so region order — and therefore word indices, and
+  therefore annotations — never move when it is flipped.
+- **A label column and the paragraph beside it are pulled apart.** MuPDF
+  returned them as one block with their lines alternating, so the abstract read
+  a keyword at a time. `layout._text_blocks` splits such a block before the cut
+  sees it. This is a second instance of trap 12's lesson: what the reader hears
+  is decided before the XY cut, not only by it.
+- **A footer set well above the foot of the page is caught.** The furniture
+  band is a fixed share of the page height, and a generous bottom margin puts
+  the footer above it, so a volume-and-page line was read at the end of every
+  page. `layout._strand_footer` moves a last block that nothing comes near
+  into the band; the repetition and scrap tests still decide.
+- **More citation shapes are passed over** — initials, corporate and legal
+  names, and an acronym given in brackets.
+- **A text cursor for selecting by keyboard.** It follows the voice while
+  reading and takes the arrow keys when paused; Shift selects. One word at a
+  time, because that is what a highlight can store. **The keys belong in
+  `MainWindow._build_shortcuts`** -- a window `QShortcut` takes precedence over
+  a focused widget's `keyPressEvent`, so moving them onto the page view would
+  break them silently, and `tools/check_shortcuts.py` would not notice. Up,
+  down, Home and End are scoped to the page view (`bind_on_page`), which is
+  what leaves the page number box its own arrows. `PageView.caret_trailing` is
+  the one piece of state worth knowing about: the end of a line and the start
+  of the next are the same position, and it says which was meant.
+- **The offline-voice list keeps your place, and takes your names for the
+  voices.** Previewing a voice refilled the list and lost the selection with it
+  — trap 15. Nicknames are the other half: typed into the box under the list,
+  stored against the voice's key in `voice_nicknames`, and shown wherever the
+  voice does — in italics in the list, and in the voice box in the main window
+  (trap 16 for why that is not wired through `changed`).
+  `tools/check_voices.py` is new and covers both.
+
+**All of it is now up, and waiting to be merged.** It went to the branch
+`reader-and-voice-list` as one commit on 16 September, and is open as
+<https://github.com/kathollander/mimick/pull/2> against `main` -- a pull
+request rather than a commit straight to `main`, the way v0.2.0 went. Nothing
+is on `main` yet, so a fresh clone still gets v0.2.0. What went up:
+
+| Changed | Why |
+| --- | --- |
+| `mimick/layout.py` | Footnotes, the block-splitting pre-pass, the stranded footer |
+| `mimick/document.py` | The footnote switch, and the cursor's movement helpers |
+| `mimick/citations.py` | More citation shapes |
+| `mimick/ui/main_window.py` | The footnote menu item, every cursor key, and the voice box's nicknames |
+| `mimick/ui/page_view.py` | The cursor itself: state, painting, blink, focus |
+| `mimick/ui/voices_dialog.py` | The list that keeps your place, and renaming a voice |
+| `mimick/config.py` | `voice_nicknames`, and one default |
+| `mimick/ui/theme.py`, `shortcuts_dialog.py`, `export_dialog.py` | A colour, the key list, the export pass-through |
+| `tools/check_caret.py` | **New.** Drives the cursor with real key events |
+| `tools/check_voices.py` | **New.** Drives the voice list against a stand-in catalogue |
+| `docs/FUTURE-FEATURES.md` | **New.** The browser port: the decision, the eight voices, the build order |
+| `README.md`, `docs/ROADMAP.md`, `docs/HANDOFF.md`, `.gitignore` | Kept in step |
+
+It is one commit rather than several because the three files that carry both
+bodies of work cannot be split without leaving a commit where the cursor
+exists and no key reaches it.
+
+**Also on the branch, later on 16 September.** The offline-voices window,
+reworked in five commits after using it rather than reading it. What it looks
+like now, top to bottom: the blurb, the search box and language filter, the
+list, then one row holding everything done to whichever voice is picked out --
+**Download** (or **Remove**) at the left, the nickname box, **Set nickname**,
+play/pause and **Preview** at the right -- then the passage Preview speaks,
+quoted, then the status line, then **Close** alone.
+
+- **Naming a voice is a box, not a rename in the list.** Clicking a name a
+  second time, and F2, are both gone: easy to trigger by accident, easy to miss
+  on purpose. `setEditTriggers(NoEditTriggers)` -- nothing in the list takes
+  typing. Enter in the box sets the name, as the button does. A nickname shows
+  in *italics*, which is the only signal that a name is one the reader gave.
+- **Download came out of the dialog's button box**, where it sat beside Close,
+  a long way from the list it acts on and next to the one button in the window
+  that does nothing to a voice.
+- **Preview phrases of your own are gone**, with the chips that chose between
+  them. A phrase can only be spoken by a voice already downloaded, so it could
+  not do the one job a preview has -- telling you whether to download the voice
+  at all. The passage every Piper voice is recorded saying does that job for
+  every voice in the list, so `RAINBOW` is the only phrase now, quoted under
+  the list. `preview_phrase` and `preview_phrases` are out of `config.py`.
+- **Get all recordings and Delete saved recordings are gone**, and so is the
+  status line's count of saved recordings. They managed a cache of that one
+  passage which fills itself the first time a voice is previewed; the count
+  read as a problem with no button to fix it. The cache still fills itself in
+  `~/.cache/mimick/piper-samples/` and nothing in the window mentions it.
+- **Picking out a voice you have named says what it came with** --
+  `Warm one is your name for Delta · en_GB-delta-medium` -- because a name of
+  your own is the only thing in the list that hides what the voice actually is.
+  A voice with no nickname puts the list's summary back, so the line is never
+  stale.
+- **The list has a floor of 220px** and the row beneath it a margin, because
+  the two were running into each other. The window is 40px taller than it was
+  despite three blocks leaving it.
+
+`PhraseRow`, `SampleFetcher`, the chip styling in `theme.py` and the unused
+`QFrame#CacheRow` went with all this, and later `piper.cached_sample_count`
+and `piper.clear_samples`, left with no callers. `tools/check_voices.py` drives
+the nickname box rather than the list, and covers the italics, the status line
+and a name half typed. Traps 15 and 17 are the two that cost time here, and
+they are the same lesson one layer apart: **anything that refills a list the
+reader is working through has to put them back where they were, and must not
+write over what they are reading.**
+
+**Shortcuts now fit a browser too, 16 September.** The highlight buttons moved
+from `Ctrl`+`T` to `Ctrl`+`Shift`+`H`, and the notes panel from `Ctrl`+`Shift`+`N`
+to `Ctrl`+`B`, because a browser keeps both old keys for itself. The two
+versions share one set of keys; `tools/check_shortcuts.py` now also fails on
+any key a browser keeps. The full note is **Shortcuts** in
+[`FUTURE-FEATURES.md`](FUTURE-FEATURES.md).
+
+**Three small ones, later on 16 September**, done while Kat worked through
+the testing checklist. A word hyphenated across a line before a capital keeps
+its hyphen and loses the space (`document._join_words`), so "Piatek-Jimenez" is
+no longer spoken with a pause -- `check_reading.py` flags two fewer sentences
+and nothing new, and the web sample's baseline is unchanged. **Save a copy**
+suggests the companion's own name rather than `X (notes) (notes).pdf`. And
+`install.sh` writes a `.pth` file like `install.ps1` instead of setting
+`PYTHONPATH` in the launcher -- see trap 10.
+
+**And one that mattered, found by Kat's test of the browser reader:** a
+598-page scanned book took over three minutes to open, in either version.
+Trap 18. It opens in 12s now. Re-run `./install.sh` to pick up the new
+launcher; the applications-menu entry has not been clicked since the change.
+
+**Do not merge it yet.** Kat has more changes to make first, and they belong on
+the same branch. The working tree is already on `reader-and-voice-list`, so
+carry on there: commit, `git push`, and the new commits join pull request #2 by
+themselves. **Do not start a fresh branch off `main`** -- `main` is still at
+v0.2.0, so a branch cut from it would not have any of the work above in it, and
+the two would have to be reconciled later. `git branch --show-current` says
+which branch you are on; `git checkout reader-and-voice-list` puts you back if
+something has moved you off it. The pull request is merged, when it is merged,
+from the **Merge pull request** button at
+<https://github.com/kathollander/mimick/pull/2>.
+
+**What has not been checked by hand.** Everything above was tested offscreen,
+with synthesized mouse events for the dragging and the ×. **Nobody has yet
+dragged the markup bar with a real mouse, listened to 5×, or moved the text
+cursor with a real keyboard.** The questions worth answering first: is the top
+of the speed range actually comprehensible; does the word highlight still keep
+up with the voice at 4–5×; and does the cursor land where your eye expects
+after a pause. None of that is visible to a check tool.
+
+The voices window is in the same position: it has been driven by
+`tools/check_voices.py` and rendered offscreen at every size, but nothing in it
+has been clicked with a real mouse. It is installed on Kat's machine as of 16
+September and waiting to be used. What a check tool cannot answer: whether
+**Set nickname** earns its click or should save when you click away from the
+box, whether Download reads as belonging to the list now that Close sits alone,
+and whether the italics say *you named this one* at a glance.
+
+`tools/` holds five check tools; anything worth keeping should be written up
+there properly rather than left as a scratch script.
+
+**Windows remains the single biggest untested surface in the project** — see
+the Windows section above; nothing in it has met the platform it targets. The
+release went out anyway, because the reading and notes fixes mattered to the
+people already using it on Linux, and the README now says so plainly in the
+heads-up box at the top rather than burying it in known issues.
+
+Not done: see [`ROADMAP.md`](ROADMAP.md). The release checklist there is the
+next thing to work through. The most valuable tasks are **using the reader
+changes on a real reading**, which is the only way the speed range, the markup
+bar and the rearranged voices window get judged; **trying it on more real
+documents** — `tools/check_reading.py` makes that quick — and **hearing back
+from the first Windows run**, which is the only part of the install path still
+unverified on either platform.
+
+Published at **<https://github.com/kathollander/mimick>** (public, AGPL-3.0),
+pushed on 12 September 2026. Commit as `kathollander <kathoacct@pm.me>`, which
+is what the initial LICENSE commit used.
+
+Git-ignored in `Testing/`: `*.mp3` (conversions run to 26 MB and regenerate in
+seconds), `* (notes).pdf` (the annotated copies Mimick writes as you work), and
+now **every PDF except the MDPI sample** — `Testing/*.pdf` with one exception,
+rather than a line per document, because the local test documents are journal
+articles that are not ours to redistribute. The MDPI article is kept: CC BY 4.0,
+it is what `tools/check_caret.py` opens by name, and it is the document the
+docs tell you to run. `tools/check_reading.py` is pointed at `Testing/` and
+takes whatever is there, so its result depends on which documents are in your
+own copy -- a flagged sentence there is not necessarily a regression.

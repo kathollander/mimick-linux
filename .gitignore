@@ -1,0 +1,18 @@
+.venv/
+__pycache__/
+*.pyc
+
+# Conversions produced while testing. The sample PDF is kept, the audio is not:
+# it is large, it is regenerated in seconds, and nobody needs it in a clone.
+Testing/*.mp3
+
+# Annotated copies Mimick writes beside a document as you make notes.
+* (notes).pdf
+
+# Documents used for testing that are not ours to redistribute. The MDPI
+# sample is kept because it is CC BY 4.0; anything else stays local, so the
+# rule is "everything, except that one" rather than a line per document.
+Testing/*.pdf
+# Which of those the checks use, by a nickname: their titles stay local too.
+Testing/local-documents.json
+!Testing/Big Ideas from Atleo and Boron 2022.pdf
