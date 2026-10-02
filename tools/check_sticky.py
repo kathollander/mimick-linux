@@ -113,6 +113,7 @@ with tempfile.TemporaryDirectory() as folder:
     long_rich = ('<p><b>Exam!</b> Link to <i>self-efficacy</i>. <s>Ask</s> <u>Bring</u> '
                  '<span style="font-size:18pt">BIG</span></p><ul><li>one</li><li>two <b>b</b></li></ul>'
                  '<p>' + "word " * 40 + "</p>")
+    gone = store.add_sticky(0, 40, 40, "<p>removed again</p>")   # numbered before the others
     first = store.add_sticky(0, 300, 120, long_rich)
     second = store.add_sticky(1, 590, 830, "<p>in the corner</p>", colour=(0.55, 0.80, 1.00))
     check("a sticky is kept inside its page",
@@ -120,8 +121,7 @@ with tempfile.TemporaryDirectory() as folder:
     store.set_sticky(second, rich="<p>moved <u>and</u> changed</p>", rect=(50, 400, 250, 410), folded=True)
     check("a box made too short grows to fit its words", second.rect[3] - second.rect[1] >= STICKY_MIN,
           str(second.rect))
-    gone = store.add_sticky(0, 40, 40, "<p>removed again</p>")
-    store.remove_sticky(gone)               # leaves a freed object, which a compacting save renumbers past
+    store.remove_sticky(gone)               # frees a number below theirs, which a compacting save closes up
     saved = folder / "saved.pdf"
     store.save_as(saved)
     # Saving must not renumber the open document's objects: every sticky and

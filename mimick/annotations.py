@@ -840,11 +840,12 @@ class AnnotationStore:
             for number in range(expected_pages)
         )
         try:
-            # garbage=2, not 3: 3 compacts the object numbers of the open
-            # document as well as the file's, and every highlight and sticky is
-            # found again by its number -- after such a save, moving, editing or
-            # deleting one did nothing. 2 still drops what nothing uses.
-            doc.save(str(temporary), garbage=2, deflate=True)
+            # garbage=1, not 3: 2 and up compact the object numbers of the open
+            # document as well as the file's, once anything has been deleted,
+            # and every highlight and sticky is found again by its number --
+            # after such a save, moving, editing or deleting one did nothing.
+            # 1 still drops what nothing uses.
+            doc.save(str(temporary), garbage=1, deflate=True)
             _verify(temporary, expected_pages, expected_notes)
             os.replace(temporary, target)
         finally:
