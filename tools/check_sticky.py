@@ -120,8 +120,17 @@ with tempfile.TemporaryDirectory() as folder:
     store.set_sticky(second, rich="<p>moved <u>and</u> changed</p>", rect=(50, 400, 250, 410), folded=True)
     check("a box made too short grows to fit its words", second.rect[3] - second.rect[1] >= STICKY_MIN,
           str(second.rect))
+    gone = store.add_sticky(0, 40, 40, "<p>removed again</p>")
+    store.remove_sticky(gone)               # leaves a freed object, which a compacting save renumbers past
     saved = folder / "saved.pdf"
     store.save_as(saved)
+    # Saving must not renumber the open document's objects: every sticky and
+    # highlight is found again by its number, so after a renumbering save (the
+    # desktop autosaves a second after each change) moving, editing or deleting
+    # one silently did nothing until the file was opened again. Found 1 October.
+    check("after saving, every sticky is still found in the open document",
+          all(store._find(item)[1] is not None for item in store.stickies),
+          [(item.xref, [a.xref for a in store._find(item)[0].annots()]) for item in store.stickies])
     again = AnnotationStore(Doc(saved))
     check("both stickies come back", len(again.stickies) == 2, str(len(again.stickies)))
     for before, after in zip(store.stickies, again.stickies):
