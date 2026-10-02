@@ -69,18 +69,22 @@ def main() -> int:
     print("Adding one")
     check("+ Add sticky and the formatting row are on the bar",
           window.add_sticky_button.isVisible() and window.sticky_format.isVisible())
+    check("its colour sits beside it, not on the formatting row",
+          window.sticky_colour_button.isVisible()
+          and window.sticky_colour_button.parent() is window.add_sticky_button.parent()
+          and not hasattr(window.sticky_format, "colour"))
+    row = window.sticky_format
+    check("in the panel the formatting row fills the bar's width",
+          window.markup_bar.home == "panel" and row.width() >= window.add_note_button.width() - 2,
+          (row.width(), window.add_note_button.width()))
     QTest.mouseClick(window.add_sticky_button, Qt.MouseButton.LeftButton)
-    settle(app)
-    check("+ Add sticky waits for a click on the page", view.placing_sticky)
-    origin = view._origin(0) - view._scroll_offset()
-    spot = QPoint(origin.x() + round(300 * view.zoom), origin.y() + round(420 * view.zoom))
-    QTest.mouseClick(view.viewport(), Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, spot)
     settle(app, 10)
-    check("a click there adds a sticky", len(store.stickies) == 1, len(store.stickies))
+    check("+ Add sticky adds one straight away", len(store.stickies) == 1, len(store.stickies))
     item = store.stickies[0] if store.stickies else None
     widget = view.sticky_widget(item) if item else None
-    check("…at that place on the page", item is not None and abs(item.rect[0] - 300) < 2
-          and abs(item.rect[1] - 420) < 2, item and item.rect)
+    page_width = window.document.page_size(view.page)[0]
+    check("…in the middle of the page on screen", item is not None and item.page == view.page
+          and abs((item.rect[0] + item.rect[2]) / 2 - page_width / 2) < 40, item and item.rect)
     check("…ready to type in", widget is not None and widget.editor.hasFocus())
     if widget is None:
         return 1
@@ -129,8 +133,27 @@ def main() -> int:
     QTest.keyClick(window, Qt.Key.Key_B, CTRL)
     settle(app)
     check("Ctrl+B outside a sticky still hides the notes panel", not view.notes_visible)
+    check("…and the bar goes with it, still at home in the panel",
+          window.markup_bar.home == "panel" and not window.markup_bar.isVisible()
+          and window.settings.get("markup_home") == "panel")
     QTest.keyClick(window, Qt.Key.Key_B, CTRL)
     settle(app)
+    check("…and comes back with it", view.notes_visible and window.markup_bar.isVisible())
+    window._place_markup_bar("top", announce=True)
+    QTest.keyClick(window, Qt.Key.Key_B, CTRL)
+    settle(app)
+    check("a bar across the top stays there when the panel is hidden",
+          window.markup_bar.home == "top" and window.markup_bar.isVisible())
+    window._place_markup_bar("panel", announce=True)
+    settle(app)
+    check("putting it in a closed panel opens the panel", view.notes_visible
+          and window.markup_bar.home == "panel" and window.markup_bar.isVisible())
+    QTest.keyClick(window, Qt.Key.Key_B, CTRL)
+    settle(app)
+    window.act_annotation_bar.trigger()
+    settle(app)
+    check("Ctrl+Shift+H with the bar in a closed panel opens the panel",
+          view.notes_visible and window.markup_bar.isVisible() and window.act_annotation_bar.isChecked())
 
     print("Moving, deleting, undoing")
     before = tuple(item.rect)
@@ -191,7 +214,8 @@ def main() -> int:
     window._set_sticky_shown(False)
     settle(app)
     check("Display > Sticky notes off takes + Add sticky off the bar",
-          not window.add_sticky_button.isVisible() and not window.sticky_format.isVisible())
+          not window.add_sticky_button.isVisible() and not window.sticky_colour_button.isVisible()
+          and not window.sticky_format.isVisible())
     check("…and the sticky stays on the page", len(store.stickies) == 1 and view.sticky_widget(item).isVisible())
     window._set_sticky_shown(True)
     window._show_switches(True)

@@ -69,7 +69,6 @@ class PageView(QAbstractScrollArea):
     annotation_remove_requested = Signal(object)            # the annotation
     # Sticky notes (sticky_note.py): what is done to one on the page, passed on
     # for the window to make the change in the store.
-    sticky_place_requested = Signal(int, float, float)      # + Add sticky, then a click
     sticky_moved = Signal(object, tuple)                    # the sticky, its new rectangle
     sticky_typed = Signal(object)
     sticky_folding = Signal(object, bool)
@@ -110,7 +109,6 @@ class PageView(QAbstractScrollArea):
         self._show_stickies = True
         # One StickyNote widget per sticky on screen, by the Sticky object.
         self._sticky_widgets: dict[int, StickyNote] = {}
-        self._placing_sticky = False
         # Find: every match as (first word, last word, page), which one is being
         # looked at, and the match numbers on each page so painting a page does
         # not walk the whole list.
@@ -1139,14 +1137,22 @@ class PageView(QAbstractScrollArea):
 
     # -- sticky notes ----------------------------------------------------------
 
-    @property
-    def placing_sticky(self) -> bool:
-        return self._placing_sticky
-
-    def set_placing_sticky(self, on: bool) -> None:
-        """+ Add sticky: the next click on a page says where it goes."""
-        self._placing_sticky = on
-        self.viewport().setCursor(Qt.CursorShape.CrossCursor if on else Qt.CursorShape.IBeamCursor)
+    def view_spot(self, width: float) -> tuple[int, float, float] | None:
+        """Where + Add sticky puts a note ``width`` points wide: in the middle
+        of the page on screen, a third of the way down, so it can be dragged
+        from there to where it goes. As page, x, y in PDF points."""
+        if self._document is None or not self._offsets:
+            return None
+        view = self.viewport()
+        right = self._margin_starts_at() if self._show_notes else view.width()
+        point = QPoint(right // 2, view.height() // 3) + self._scroll_offset()
+        page = self._page_at(point.y())
+        origin = self._origin(page)
+        page_width, page_height = self._document.page_size(page)
+        x = (point.x() - origin.x()) / self._zoom - width / 2
+        y = (point.y() - origin.y()) / self._zoom
+        return (page, max(0.0, min(page_width - width, x)),
+                max(20.0, min(page_height - 60.0, y)))
 
     def sticky_widget(self, item) -> StickyNote | None:
         return self._sticky_widgets.get(id(item))
@@ -1417,16 +1423,6 @@ class PageView(QAbstractScrollArea):
             return
         self._press_point = event.position().toPoint()
         self._dragging = False
-
-        if self._placing_sticky:
-            located = self._locate(self._press_point)
-            self.set_placing_sticky(False)
-            # The whole click is the sticky's: its release must not go on to
-            # read from that sentence, or start a selection.
-            self._press_point = None
-            if located is not None:
-                self.sticky_place_requested.emit(*located)
-            return
 
         # The remove badge is checked first: it sits on top of the highlight it
         # belongs to, so testing the highlight first would swallow every click.

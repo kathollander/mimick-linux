@@ -17,7 +17,7 @@ from PySide6.QtWidgets import (
     QSlider, QSpinBox, QToolButton, QVBoxLayout, QWidget,
 )
 
-from ..annotations import (COLOURS, STICKY_COLOUR, AnnotationStore, companion_for,
+from ..annotations import (COLOURS, STICKY_COLOUR, STICKY_WIDTH, AnnotationStore, companion_for,
                            existing_companion, fallback_companion_for, sticky_sentences)
 from ..apps import reveal
 from .. import layout
@@ -294,7 +294,6 @@ class MainWindow(QMainWindow):
         self.page_view.context_requested.connect(self._on_page_context_menu)
         self.page_view.card_context_requested.connect(self._on_card_context_menu)
         self.page_view.annotation_remove_requested.connect(self.delete_annotation)
-        self.page_view.sticky_place_requested.connect(self.add_sticky_at)
         self.page_view.sticky_moved.connect(self._on_sticky_moved)
         self.page_view.sticky_typed.connect(self._on_sticky_typed)
         self.page_view.sticky_folding.connect(self._on_sticky_folding)
@@ -439,22 +438,37 @@ class MainWindow(QMainWindow):
         self.add_note_button.setToolTip("Highlight the selected text and write a note  (Ctrl+M)")
         self.add_note_button.clicked.connect(self.note_selection)
 
-        # Sticky notes: + Add sticky, and the row that formats the one being
-        # typed in. Both travel with the bar; Display > Sticky notes hides them.
+        # Sticky notes: + Add sticky with its colour beside it, as Highlight's
+        # is, and the row that formats the one being typed in. Both travel with
+        # the bar; Display > Sticky notes hides them. + Add sticky drops the
+        # note on the page on screen, to be dragged where it goes (Kat,
+        # 1 October: no "click where it goes" step).
         self.add_sticky_button = QPushButton("+  Add sticky")
-        self.add_sticky_button.setCheckable(True)
-        self.add_sticky_button.setToolTip("Add a sticky note: then click where it goes on the page  (Ctrl+Alt+M)")
-        self.add_sticky_button.clicked.connect(self.start_placing_sticky)
+        self.add_sticky_button.setToolTip("Add a sticky note to the page on screen, then drag it "
+                                          "by its top edge to where it goes  (Ctrl+Alt+M)")
+        self.add_sticky_button.clicked.connect(self.add_sticky_on_screen)
+        self.sticky_colour_button = QPushButton()
+        self.sticky_colour_button.setFixedWidth(48)
+        self.sticky_colour_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.sticky_colour_button.setToolTip("Sticky note colour \u2014 the one you are in, "
+                                             "or the next one you add")
+        self.sticky_colour_button.clicked.connect(lambda: self._sticky_colour_menu(
+            self.sticky_colour_button.mapToGlobal(QPoint(0, self.sticky_colour_button.height()))))
+        self.sticky_group = QWidget()
+        pair = QHBoxLayout(self.sticky_group)
+        pair.setContentsMargins(0, 0, 0, 0)
+        pair.setSpacing(4)
+        pair.addWidget(self.add_sticky_button, 1)
+        pair.addWidget(self.sticky_colour_button)
         self.sticky_format = StickyFormatRow()
         self.sticky_format.setObjectName("StickyFormat")
         self.sticky_format.format_requested.connect(self._apply_sticky_format)
-        self.sticky_format.colour_requested.connect(self._sticky_colour_menu)
         self._sticky_colour = STICKY_COLOUR
 
         self.markup_bar = MarkupBar(self.page_view.viewport())
         # Add note first, Highlight under it: writing is what the panel is for.
         self.markup_bar.set_buttons([self.add_note_button, self.highlight_group,
-                                     self.add_sticky_button, self.sticky_format])
+                                     self.sticky_group, self.sticky_format])
         self.markup_bar.set_stage(self.page_view.viewport())
         self.markup_bar.home_changed.connect(self._on_markup_moved)
         self.markup_bar.detached.connect(
@@ -2684,33 +2698,26 @@ class MainWindow(QMainWindow):
         The sticky notes on the page stay, as highlights do."""
         self.act_sticky.setChecked(shown)
         self.settings.set("sticky_notes", shown)
-        self.add_sticky_button.setVisible(shown)
+        self.sticky_group.setVisible(shown)
         self.sticky_format.setVisible(shown)
         self.markup_bar.adjustSize()
         self.page_view.refresh_panel_widgets()
-        if not shown:
-            self.start_placing_sticky(False)
         if not quiet:
             self._set_status("Sticky notes: + Add sticky and its formatting are on the Highlight "
                              "and Add note bar" if shown else
                              "+ Add sticky is off the bar \u2014 the sticky notes on the page stay "
                              "where they are")
 
-    def start_placing_sticky(self, on: bool | None = None) -> None:
-        """+ Add sticky: the next click on the page puts one there."""
-        if on is None:
-            on = not self.page_view.placing_sticky
-        on = bool(on) and self.store is not None
-        self.page_view.set_placing_sticky(on)
-        self.add_sticky_button.setChecked(on)
-        if on:
-            self._set_status("Click where the sticky note goes \u2014 Esc to stop")
+    def add_sticky_on_screen(self) -> None:
+        """+ Add sticky: in the middle of the page on screen, ready to type in
+        and to be dragged by its top edge to where it goes."""
+        if self.store is None:
+            return
+        spot = self.page_view.view_spot(STICKY_WIDTH)
+        if spot is not None:
+            self.add_sticky_at(*spot, to_drag=True)
 
     def _on_escape(self) -> None:
-        if self.page_view.placing_sticky:
-            self.start_placing_sticky(False)
-            self._set_status("")
-            return
         self.page_view.clear_selection()
 
     def add_sticky_here(self) -> None:
@@ -2727,17 +2734,18 @@ class MainWindow(QMainWindow):
         width, _height = self.document.page_size(page)
         self.add_sticky_at(page, max(0.0, width - 220), 60.0)
 
-    def add_sticky_at(self, page: int, x: float, y: float) -> None:
+    def add_sticky_at(self, page: int, x: float, y: float, to_drag: bool = False) -> None:
         if self.store is None:
             return
-        self.start_placing_sticky(False)
         item = self.store.add_sticky(page, x, y, "", self._sticky_colour, author=self._author())
         self._fresh_sticky = item
         self._remember_sticky_added(item)
         self._after_sticky_change()
         self.page_view.viewport().update()
         QTimer.singleShot(0, lambda: self.page_view.focus_sticky(item))
-        self._set_status("Sticky note added \u2014 type, and Esc when you are done. "
+        self._set_status("Sticky note added \u2014 drag its top edge to move it, type in it, "
+                         "and Esc when you are done" if to_drag else
+                         "Sticky note added \u2014 type, and Esc when you are done. "
                          "The bar's buttons format it")
 
     def _sticky_ref(self, item) -> list:
@@ -2885,7 +2893,7 @@ class MainWindow(QMainWindow):
         widget = self.page_view.sticky_widget(item) if item is not None else None
         self.sticky_format.show_state(widget.editor.state() if widget is not None else None)
         colour = item.colour if item is not None else self._sticky_colour
-        self.sticky_format.colour.setIcon(colour_swatch(colour, 14))
+        self.sticky_colour_button.setIcon(colour_swatch(colour, 14, square=True))
 
     def _apply_sticky_format(self, what: str, value) -> None:
         item = self.page_view.editing_sticky()
@@ -3019,9 +3027,10 @@ class MainWindow(QMainWindow):
     def _place_markup_bar(self, home: str, point: QPoint | None = None,
                           announce: bool = False) -> None:
         """Move the bar to one of its four homes and remember it was there."""
-        if home == "panel" and not self.page_view.notes_visible:
-            # The panel is the one home that can be taken away underneath it.
-            home = "top"
+        if home == "panel" and announce and not self.page_view.notes_visible:
+            # Asked for in a closed panel: the panel opens to show it. Put there
+            # quietly (at start-up), it waits in the closed panel instead.
+            self._open_notes_panel()
 
         # Out of wherever it is. Taking it out of a layout means taking it out
         # by hand: a layout will not let go of a widget just because the widget
@@ -3079,6 +3088,12 @@ class MainWindow(QMainWindow):
 
     def _toggle_markup_bar(self, checked: bool) -> None:
         """Show or hide the Highlight and Add note buttons altogether."""
+        if (not checked and self._markup_shown and self.markup_bar.home == "panel"
+                and not self.page_view.notes_visible):
+            # Asked for while it is in a closed panel: the panel opens to show it.
+            self.act_annotation_bar.setChecked(True)
+            self._open_notes_panel()
+            return
         self._markup_shown = checked
         self.settings.set("show_annotation_bar", checked)
         self._place_markup_bar(self.markup_bar.home)
@@ -3090,14 +3105,14 @@ class MainWindow(QMainWindow):
         """Show or hide the notes column beside the page."""
         self.page_view.set_notes_visible(checked)
         self.settings.set("show_notes", checked)
-        # Putting the column away must not take Add note away with it -- that
-        # was the old behaviour, and the reason the markup bar exists.
-        if not checked and self.markup_bar.home == "panel":
-            self._place_markup_bar("top")
-            self._set_status("Notes panel hidden \u2014 Highlight and Add note "
-                             "moved to the top")
-            return
+        # A bar in the panel goes away with it and comes back with it: it stays
+        # wherever it was last put (Kat, 1 October). Ctrl+H and Ctrl+M still
+        # work without it.
         self._set_status("Notes panel shown" if checked else "Notes panel hidden")
+
+    def _open_notes_panel(self) -> None:
+        self.act_show_notes.setChecked(True)
+        self._toggle_notes(True)
 
 
 

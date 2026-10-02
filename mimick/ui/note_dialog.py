@@ -14,8 +14,10 @@ from ..annotations import COLOURS
 from . import theme
 
 
-def colour_swatch(colour: tuple[float, float, float], size: int = 14) -> QPixmap:
-    """A round chip of colour, for buttons and menus."""
+def colour_swatch(colour: tuple[float, float, float], size: int = 14,
+                  square: bool = False) -> QPixmap:
+    """A round chip of colour, for buttons and menus; ``square`` gives a sticky
+    note's shape, outlined, rather than a highlight's."""
     pixmap = QPixmap(size, size)
     pixmap.fill(Qt.GlobalColor.transparent)
     painter = QPainter(pixmap)
@@ -23,7 +25,11 @@ def colour_swatch(colour: tuple[float, float, float], size: int = 14) -> QPixmap
     painter.setPen(Qt.PenStyle.NoPen)
     red, green, blue = colour
     painter.setBrush(QColor(int(red * 255), int(green * 255), int(blue * 255)))
-    painter.drawEllipse(0, 0, size - 1, size - 1)
+    if square:
+        painter.setPen(QColor(0, 0, 0, 90))
+        painter.drawRoundedRect(0, 0, size - 1, size - 1, 3, 3)
+    else:
+        painter.drawEllipse(0, 0, size - 1, size - 1)
     painter.end()
     return pixmap
 

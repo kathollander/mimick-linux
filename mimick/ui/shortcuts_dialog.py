@@ -63,7 +63,7 @@ GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
     ]),
     ("Sticky notes", [
         ("Ctrl+Alt+M", "Add a sticky note under the text cursor (or + Add sticky, then "
-                       "click where it goes)"),
+                       "drag it where it goes)"),
         ("Ctrl+B / Ctrl+I / Ctrl+U", "Bold, italic, underline — while you type in a sticky "
                                      "note (elsewhere Ctrl+B is the notes panel)"),
         ("Ctrl+Shift+X", "Strikeout"),

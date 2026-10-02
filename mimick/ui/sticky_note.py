@@ -26,8 +26,8 @@ import re
 from PySide6.QtCore import QPoint, QRect, Qt, QTimer, Signal
 from PySide6.QtGui import (QColor, QFont, QKeySequence, QPainter, QPen, QTextCharFormat,
                            QTextCursor, QTextListFormat)
-from PySide6.QtWidgets import (QComboBox, QFrame, QHBoxLayout, QPushButton, QTextEdit,
-                               QToolButton, QWidget)
+from PySide6.QtWidgets import (QComboBox, QFrame, QHBoxLayout, QPushButton, QSizePolicy,
+                               QTextEdit, QToolButton, QWidget)
 
 from ..annotations import STICKY_MIN, STICKY_PAD, STICKY_SIZE, STICKY_SIZES, clean_rich
 
@@ -463,19 +463,20 @@ class StickyNote(QWidget):
 
 
 class StickyFormatRow(QWidget):
-    """Size, bold, italic, underline, strikeout, list and colour, for the
-    sticky being typed in. Carried by the markup bar, so it goes wherever
-    Highlight and Add note go. None of it takes the keyboard: a press here must
-    leave the cursor in the note."""
+    """Size, bold, italic, underline, strikeout and list, for the sticky being
+    typed in. Carried by the markup bar, so it goes wherever Highlight and Add
+    note go. None of it takes the keyboard: a press here must leave the cursor
+    in the note. Its buttons share whatever width the row is given, so in the
+    notes panel it fills the column (Kat, 1 October). The colour is not here:
+    it sits beside + Add sticky, as Highlight's sits beside Highlight."""
 
-    format_requested = Signal(str, object)     # what, and a size or colour
-    colour_requested = Signal(QPoint)
+    format_requested = Signal(str, object)     # what, and a size
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         row = QHBoxLayout(self)
         row.setContentsMargins(0, 0, 0, 0)
-        row.setSpacing(3)
+        row.setSpacing(4)
         self.size_box = QComboBox(self)
         self.size_box.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.size_box.setToolTip("Text size, in points  (Ctrl+] bigger, Ctrl+[ smaller)")
@@ -483,7 +484,8 @@ class StickyFormatRow(QWidget):
             self.size_box.addItem(str(size), size)
         self.size_box.activated.connect(
             lambda index: self.format_requested.emit("size", self.size_box.itemData(index)))
-        row.addWidget(self.size_box)
+        self.size_box.setMinimumWidth(52)
+        row.addWidget(self.size_box, 3)
         self.buttons: dict[str, QToolButton] = {}
         for what, label, tip in (("bold", "B", "Bold  (Ctrl+B)"), ("italic", "I", "Italic  (Ctrl+I)"),
                                  ("underline", "U", "Underline  (Ctrl+U)"),
@@ -494,6 +496,7 @@ class StickyFormatRow(QWidget):
             button.setToolTip(tip)
             button.setCheckable(True)
             button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
             font = button.font()
             font.setBold(what == "bold")
             font.setItalic(what == "italic")
@@ -501,15 +504,8 @@ class StickyFormatRow(QWidget):
             font.setStrikeOut(what == "strike")
             button.setFont(font)
             button.clicked.connect(lambda _checked=False, w=what: self.format_requested.emit(w, None))
-            row.addWidget(button)
+            row.addWidget(button, 2)
             self.buttons[what] = button
-        self.colour = QToolButton(self)
-        self.colour.setToolTip("Sticky note colour — this one, or the next one you add")
-        self.colour.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self.colour.clicked.connect(
-            lambda: self.colour_requested.emit(self.colour.mapToGlobal(QPoint(0, self.colour.height()))))
-        row.addWidget(self.colour)
-        row.addStretch(1)
         self.show_state(None)
 
     def show_state(self, state: dict | None) -> None:
