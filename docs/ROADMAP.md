@@ -497,10 +497,16 @@ part already written in the browser version.
 - **A light theme** following the system, and Display → Theme (Night / Day /
   Match the system). `ui/theme.py` is one fixed dark palette. Browser: the token
   sets at the top of `reader.html`.
-- **OCR for scans** — the only mention of OCR here is an error string telling
-  the reader their scan needs it (`main_window.py:846`). PyMuPDF can do it
-  natively through `get_textpage_ocr`, which is a shorter road than the
-  browser's Tesseract build.
+- **OCR for scans** — done 25 September (`mimick/ocr.py`, MuPDF's built-in
+  Tesseract, needing `tesseract-ocr-eng`). Two things the browser has since
+  gained are not here yet:
+  - **A scan with only some of its words** (browser, 4 October): pages with
+    words and a picture over a tenth of the page are recognised when asked
+    for from the menu, adding only the words no existing word sits over.
+    `../Mimick/reader.py`: `pages_partly_read`, `unread_words`,
+    `add_text_layer`.
+  - **Photographed PDFs lightened as they open** (browser, 2 October):
+    `lighten_pdf` in `../Mimick/reader.py`.
 - **A guided tour** — **Show me around**, fourteen steps on a sample document,
   each finished by the reader doing it with the app's own keys. Browser:
   `js/tour.js`.
