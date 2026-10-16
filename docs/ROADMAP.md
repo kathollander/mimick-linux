@@ -2,6 +2,19 @@
 
 Where Mimick is, and where it's going.
 
+## 15 October 2026 — formatted notes, sticky titles, linked stickies
+
+Kat's asks (`972a649`, shared code only, not pushed): bold, italics,
+underline, strikeout and lists in a highlight's note, kept as the annotation's
+rich text (RC) beside its plain Contents; a title on a sticky note, kept as its
+Subject; a sticky linked to the highlight it is about, by the highlight's PDF
+name (/NM) in a private `MimickLink` key. All in `annotations.py` and
+`notes_export.py`; check: `tools/check_links.py`. The desktop already keeps
+all three when it saves, and an edit that leaves a note's words alone keeps its
+formatting. **Its UI is still to do** (formatting row in the note dialog,
+titles, link menus, linked cards); the browser version has it — see
+`../Mimick/docs/PARITY.md` and `../Mimick/docs/HANDOFF.md`, *Latest* (15 October).
+
 ## 29 September 2026 — sticky notes, and the quick switches
 
 Kat's ask, planned with her the same day (both apps). **Sticky notes**
