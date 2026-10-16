@@ -10,6 +10,12 @@ It sits at a place on a page, not on any words. Firefox, Chrome, Okular and
 Acrobat all draw it from the appearance MuPDF makes, formatting included, and
 it stays editable: Mimick reads the rich text back when the file is opened
 again (Kat, 29 September 2026).
+
+A highlight's note can be formatted too, kept the same way as a sticky's: the
+PDF's rich-text copy (RC) beside its plain one, which Acrobat shows and every
+other reader falls back from. A sticky can have a title (the PDF's Subject,
+as a highlight's heading is) and be linked to a highlight: it names the
+highlight's /NM in a private key, which other readers ignore (Kat, 15 October).
 """
 
 from __future__ import annotations
@@ -17,6 +23,7 @@ from __future__ import annotations
 import html
 import os
 import re
+import secrets
 from dataclasses import dataclass, field
 from html.parser import HTMLParser
 from pathlib import Path
@@ -37,6 +44,12 @@ DEFAULT_COLOUR = COLOURS[0][1]
 # heading. Other programs ignore keys they do not know.
 _RANGE_KEY = "MimickRange"
 _RANGE_PREFIX = "mimick-range:"      # how older files stored it
+
+# A sticky linked to a highlight names it here: the highlight's /NM, the PDF's
+# own name for an annotation, which survives saving where object numbers do
+# not. Names Mimick gives start with this.
+_LINK_KEY = "MimickLink"
+_NAME_PREFIX = "mimick-"
 
 # Mimick never writes into the PDF you opened. Highlights and notes go to a
 # companion file beside it, named the same way the Save a copy dialog has
@@ -92,7 +105,9 @@ class Annotation:
     rects: list[tuple[float, float, float, float]]
     text: str = ""                     # the highlighted words
     title: str = ""                    # optional heading, shown by other readers
-    note: str = ""                     # the reader's own comment
+    note: str = ""                     # the reader's own comment, as plain text
+    rich: str = ""                     # ... formatted (clean_rich), or "" if it has no formatting
+    name: str = ""                     # the PDF's /NM, which a sticky links to
     colour: tuple[float, float, float] = DEFAULT_COLOUR
     first_word: int = -1
     last_word: int = -1
@@ -143,6 +158,9 @@ class Sticky:
     folded: bool = False
     author: str = ""
     xref: int = 0
+    title: str = ""                    # optional, the PDF's Subject, as a highlight's heading
+    link: str = ""                     # the name of the highlight it belongs to, or ""
+    name: str = ""                     # its own /NM
 
     @property
     def top(self) -> float:
@@ -506,6 +524,58 @@ def _write_range(document, xref: int, first: int, last: int) -> None:
         pass          # the highlight still works, it just cannot be re-linked
 
 
+def _write_name(doc, xref: int, name: str) -> None:
+    if name:
+        doc.xref_set_key(xref, "NM", pymupdf.get_pdf_str(name))
+
+
+def _read_link(doc, xref: int) -> str:
+    try:
+        kind, value = doc.xref_get_key(xref, _LINK_KEY)
+    except Exception:
+        return ""
+    if kind != "string" or not value:
+        return ""
+    return value
+
+
+def _flat(text: str) -> str:
+    return " ".join(str(text or "").split())
+
+
+def note_from_rich(rich: str) -> tuple[str, str]:
+    """A formatted note as ``(plain, rich)``: the plain words, as every reader
+    shows them, and the formatting -- "" when there is none worth keeping, so
+    a note with no formatting stays plain in the file."""
+    rich = clean_rich(rich)
+    plain = rich_to_plain(rich).strip()
+    if not plain or rich == plain_to_rich(plain):
+        return plain, ""
+    return plain, rich
+
+
+def _read_rich_note(annot, note: str) -> str:
+    """A highlight's formatted note, if it has one that still says what its
+    plain note says. A reader that edits only the plain words (Okular) can
+    leave the rich copy behind, and then the plain words are the note."""
+    try:
+        mupdf = pymupdf.mupdf
+        if not mupdf.pdf_annot_has_rich_contents(annot.this):
+            return ""
+        source = mupdf.pdf_annot_rich_contents(annot.this) or ""
+    except Exception:
+        return ""
+    plain, rich = note_from_rich(source)
+    return rich if rich and _flat(plain) == _flat(note) else ""
+
+
+def _write_rich_note(annot, note: str, rich: str) -> None:
+    """The rich copy of a highlight's note, beside its plain Contents; after
+    ``set_info``, which throws it away."""
+    if rich:
+        pymupdf.mupdf.pdf_set_annot_rich_contents(annot.this, note, _RC_HEAD + rich + "</body>")
+
+
 # What a saved copy is checked for: every highlight and every sticky note.
 MARKS = (pymupdf.PDF_ANNOT_HIGHLIGHT, pymupdf.PDF_ANNOT_FREE_TEXT)
 
@@ -557,11 +627,14 @@ class AnnotationStore:
                 # An older file kept our bookkeeping in Subject; do not show it.
                 heading = "" if subject.startswith(_RANGE_PREFIX) else subject
                 rects = _quad_rects(annot)
+                note = (info.get("content") or "").strip()
                 item = Annotation(
                     page=number,
                     rects=rects,
                     title=heading,
-                    note=(info.get("content") or "").strip(),
+                    note=note,
+                    rich=_read_rich_note(annot, note),
+                    name=info.get("id") or "",
                     colour=_annot_colour(annot),
                     first_word=first,
                     last_word=last,
@@ -605,6 +678,9 @@ class AnnotationStore:
             folded=folded,
             author=info.get("title") or "",
             xref=annot.xref,
+            title=(info.get("subject") or "").strip(),
+            link=_read_link(doc, annot.xref),
+            name=info.get("id") or "",
         )
 
     def _text_in(self, page_number: int, rects: list) -> str:
@@ -622,8 +698,11 @@ class AnnotationStore:
 
     def add(self, first_word: int, last_word: int,
             colour: tuple[float, float, float] = DEFAULT_COLOUR,
-            note: str = "", title: str = "", author: str = "") -> Annotation | None:
-        """Highlight a range of words."""
+            note: str = "", title: str = "", author: str = "",
+            rich: str = "", name: str = "") -> Annotation | None:
+        """Highlight a range of words. ``rich``, if given, is the note
+        formatted, and ``note`` is worked out from it; ``name`` puts back the
+        one a highlight had (an undo), so sticky notes linked to it still are."""
         words = self._document.words[first_word : last_word + 1]
         if not words:
             return None
@@ -636,7 +715,12 @@ class AnnotationStore:
         page = self._document.doc.load_page(page_number)
         annot = page.add_highlight_annot(quads=[pymupdf.Rect(*r).quad for r in rects])
         annot.set_colors(stroke=colour)
+        if rich:
+            note, rich = note_from_rich(rich)
         annot.set_info(content=note, title=author or self.author, subject=title)
+        _write_rich_note(annot, note, rich)
+        name = self._name_free(name)
+        _write_name(self._document.doc, annot.xref, name)
         annot.update()
         _write_range(self._document, annot.xref, on_page[0].index, on_page[-1].index)
 
@@ -646,6 +730,8 @@ class AnnotationStore:
             text=" ".join(w.text for w in on_page),
             title=title,
             note=note,
+            rich=rich,
+            name=name,
             colour=colour,
             first_word=on_page[0].index,
             last_word=on_page[-1].index,
@@ -656,7 +742,12 @@ class AnnotationStore:
         self.dirty = True
         return item
 
-    def set_note(self, item: Annotation, note: str, title: str | None = None) -> None:
+    def set_note(self, item: Annotation, note: str, title: str | None = None,
+                 rich: str | None = None) -> None:
+        """Change a highlight's note and heading. ``rich``, if given, is the
+        note formatted, and ``note`` is worked out from it. Without it a note
+        whose words did not change keeps its formatting; one whose words did
+        loses it, since it would no longer say the same thing."""
         # The page must stay referenced: if it is collected, MuPDF unbinds the
         # annotation and every call on it fails.
         page, annot = self._find(item)
@@ -664,14 +755,21 @@ class AnnotationStore:
             return
         info = annot.info or {}
         heading = item.title if title is None else title
+        if rich is not None:
+            note, rich = note_from_rich(rich)
+        else:
+            rich = item.rich if _flat(note) == _flat(item.note) else ""
+        # Contents first: setting it throws the rich text away.
         annot.set_info(
             content=note,
             title=info.get("title") or self.author,
             subject=heading,
         )
+        _write_rich_note(annot, note, rich)
         annot.update()
         _write_range(self._document, annot.xref, item.first_word, item.last_word)
         item.note = note
+        item.rich = rich
         item.title = heading
         self.dirty = True
 
@@ -696,9 +794,11 @@ class AnnotationStore:
 
     def add_sticky(self, page_number: int, x: float, y: float, rich: str = "",
                    colour: tuple[float, float, float] = STICKY_COLOUR,
-                   width: float = STICKY_WIDTH, author: str = "") -> Sticky:
+                   width: float = STICKY_WIDTH, author: str = "", title: str = "",
+                   link: str = "", name: str = "") -> Sticky:
         """A new sticky note with its top left corner at ``x``, ``y`` on a page,
-        kept inside the page."""
+        kept inside the page. ``link`` names the highlight it belongs to;
+        ``name`` puts back the one it had (an undo)."""
         page = self._document.doc.load_page(page_number)
         bounds = page.rect
         width = max(STICKY_MIN, min(width, bounds.width))
@@ -709,7 +809,9 @@ class AnnotationStore:
             richtext=True, style=sticky_style(), fill_color=colour, border_width=0.5)
         item = Sticky(page=page_number, rect=(x, y, x + width, y + STICKY_MIN),
                       rich=clean_rich(rich), colour=tuple(colour),
-                      author=author or self.author, xref=annot.xref)
+                      author=author or self.author, xref=annot.xref,
+                      title=(title or "").strip(), link=link or "", name=self._name_free(name))
+        _write_name(self._document.doc, annot.xref, item.name)
         self._write_sticky(page, annot, item)
         self.stickies.append(item)
         self.stickies.sort(key=lambda s: (s.page, s.top))
@@ -717,9 +819,11 @@ class AnnotationStore:
         return item
 
     def set_sticky(self, item: Sticky, rich: str | None = None, rect=None,
-                   colour=None, folded: bool | None = None) -> None:
-        """Change a sticky's words, place, size, colour or folding. Its height
-        never drops below what its words need, so no reader cuts them off."""
+                   colour=None, folded: bool | None = None, title: str | None = None,
+                   link: str | None = None) -> None:
+        """Change a sticky's words, place, size, colour, folding, title or the
+        highlight it is linked to ("" for none). Its height never drops below
+        what its words need, so no reader cuts them off."""
         page, annot = self._find(item)
         if annot is None:
             return
@@ -731,6 +835,10 @@ class AnnotationStore:
             item.colour = tuple(colour)
         if folded is not None:
             item.folded = bool(folded)
+        if title is not None:
+            item.title = title.strip()
+        if link is not None:
+            item.link = link
         self._write_sticky(page, annot, item)
         self.stickies.sort(key=lambda s: (s.page, s.top))
         self.dirty = True
@@ -779,7 +887,7 @@ class AnnotationStore:
         item.rect = (x0, y0, x0 + width, y0 + height)
         doc = self._document.doc
         annot.set_rect(pymupdf.Rect(*item.rect))
-        annot.set_info(title=item.author or self.author)
+        annot.set_info(title=item.author or self.author, subject=item.title)
         # Set together, and after set_info: setting Contents alone throws the
         # rich text away. Contents is the plain copy other readers edit.
         pymupdf.mupdf.pdf_set_annot_rich_contents(
@@ -789,8 +897,47 @@ class AnnotationStore:
         # Acrobat draws it as an arrow across the page.
         doc.xref_set_key(annot.xref, "CL", "null")
         doc.xref_set_key(annot.xref, _FOLDED_KEY, "true" if item.folded else "false")
+        doc.xref_set_key(annot.xref, _LINK_KEY, pymupdf.get_pdf_str(item.link) if item.link else "null")
         edge = tuple(round(c * 0.72, 3) for c in item.colour)
         annot.update(fill_color=item.colour, border_color=edge, text_color=(0, 0, 0))
+
+    # -- links between sticky notes and highlights ------------------------------
+
+    def link_sticky(self, item: Sticky, target: Annotation | None) -> None:
+        """Link a sticky note to a highlight, or with None, unlink it. A
+        highlight without a name of its own -- one MuPDF named "fitz-A0", which
+        another can share -- is given one first."""
+        if target is None:
+            self.set_sticky(item, link="")
+            return
+        if not target.name.startswith(_NAME_PREFIX) or self._name_taken(target.name, target.xref):
+            target.name = self._name_free("")
+            _write_name(self._document.doc, target.xref, target.name)
+        self.set_sticky(item, link=target.name)
+
+    def linked_to(self, item: Sticky) -> Annotation | None:
+        """The highlight a sticky note is linked to, if it is still there."""
+        if not item.link:
+            return None
+        return next((mark for mark in self.items if mark.name == item.link), None)
+
+    def stickies_of(self, mark: Annotation) -> list[Sticky]:
+        """The sticky notes linked to a highlight."""
+        if not mark.name:
+            return []
+        return [item for item in self.stickies if item.link == mark.name]
+
+    def _name_taken(self, name: str, xref: int = 0) -> bool:
+        return any(other.name == name and other.xref != xref for other in [*self.items, *self.stickies])
+
+    def _name_free(self, name: str) -> str:
+        """``name`` if no other annotation has it, or a new one."""
+        if name and not self._name_taken(name):
+            return name
+        while True:
+            fresh = _NAME_PREFIX + secrets.token_hex(6)
+            if not self._name_taken(fresh):
+                return fresh
 
     def sticky_at(self, page: int, x: float, y: float) -> Sticky | None:
         for item in reversed(self.stickies):

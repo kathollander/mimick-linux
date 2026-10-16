@@ -36,7 +36,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 from xml.sax.saxutils import escape
 
-from .annotations import COLOURS, _blocks_html, rich_blocks, rich_to_markdown
+from .annotations import COLOURS, Sticky, _blocks_html, _runs_html, rich_blocks, rich_to_markdown
 
 # How close two colours must be to count as the same one of Mimick's four.
 # Matches _same_colour in ui/note_dialog.py.
@@ -105,10 +105,15 @@ class _Entry:
     notes: list[str] = field(default_factory=list)
     rich: str = ""                              # a sticky note's text; then lines is empty
     blocks: list = field(default_factory=list)  # ... as rich_blocks gives it
+    # A formatted note on a highlight, a point a line as ``notes`` are, each
+    # point's runs as rich_blocks gives them; ``notes`` holds the plain words.
+    note_blocks: list = field(default_factory=list)
+    note_rich: str = ""
 
 
 def _is_sticky(item) -> bool:
-    return hasattr(item, "rich")
+    # Not "has rich text": since 15 October a highlight's note can too.
+    return isinstance(item, Sticky)
 
 
 @dataclass
@@ -140,14 +145,19 @@ def _gather(title: str, name: str, items, section_for=None, today: date | None =
         if not groups or groups[-1][0] != heading:
             groups.append((heading, []))
         if _is_sticky(item):
-            groups[-1][1].append(_Entry(page=item.page + 1, lines=[], title="Sticky note",
+            title = _flat(getattr(item, "title", ""))
+            groups[-1][1].append(_Entry(page=item.page + 1, lines=[],
+                                        title=f"Sticky note: {title}" if title else "Sticky note",
                                         rich=item.rich, blocks=rich_blocks(item.rich)))
             continue
         # Each line of a note is a point of its own, as it would be on paper.
         notes = [_flat(line) for line in (item.note or "").split("\n") if _flat(line)]
+        rich = getattr(item, "rich", "") or ""
+        note_blocks = [(True, runs) for _, runs in rich_blocks(rich) if runs] if rich else []
         groups[-1][1].append(_Entry(
             page=item.page + 1, lines=passage_lines(item.text), title=_flat(item.title),
-            colour=_colour_name(item.colour) if len(colours) > 1 else None, notes=notes))
+            colour=_colour_name(item.colour) if len(colours) > 1 else None, notes=notes,
+            note_blocks=note_blocks, note_rich=rich if note_blocks else ""))
     return _Notes(f"Notes: {title}", summary, groups)
 
 
@@ -204,7 +214,9 @@ def notes_markdown(title: str, name: str, items, section_for=None,
                 continue
             if entry.colour:
                 lines += ["", f"*{entry.colour}*"]
-            if entry.notes:
+            if entry.note_rich:
+                lines += [""] + [f"- {words}" for _, words in rich_to_markdown(entry.note_rich) if words]
+            elif entry.notes:
                 lines += [""] + [f"- {note}" for note in entry.notes]
     return "\n".join(lines) + "\n"
 
@@ -250,7 +262,10 @@ def _html(notes: _Notes) -> str:
                 out.append(f'<div class="sticky">{_blocks_html(entry.blocks)}</div>')
             if entry.colour:
                 out.append(f'<p class="colour">{html.escape(entry.colour)}</p>')
-            if entry.notes:
+            if entry.note_blocks:
+                out.append('<ul class="notes">' + "".join(f"<li>{_runs_html(runs)}</li>"
+                                                          for _, runs in entry.note_blocks) + "</ul>")
+            elif entry.notes:
                 out.append('<ul class="notes">' + "".join(f"<li>{html.escape(n)}</li>" for n in entry.notes) + "</ul>")
     return "".join(out)
 
@@ -386,8 +401,11 @@ def notes_docx(title: str, name: str, items, section_for=None, today: date | Non
                             else _w_para(words, "Quote", first=first))
             if entry.colour:
                 body.append(_w_para(entry.colour, "Quote", size=18, colour="666666"))
-            for note in entry.notes:
-                body.append(_w_para(note, "ListParagraph", _NOTE_LIST))
+            if entry.note_blocks:
+                body += _w_sticky(entry.note_blocks)
+            else:
+                for note in entry.notes:
+                    body.append(_w_para(note, "ListParagraph", _NOTE_LIST))
     document = (_XML + f"<w:document {_W}><w:body>" + "".join(body)
                 + '<w:sectPr><w:pgSz w:w="11906" w:h="16838"/>'
                   '<w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="708" w:footer="708" w:gutter="0"/>'
@@ -536,7 +554,9 @@ def notes_odt(title: str, name: str, items, section_for=None, today: date | None
                     body.append(_odt_p("Quotations_20_First" if opens else "Quotations", words))
             if entry.colour:
                 body.append(_odt_p("Colour", entry.colour))
-            if entry.notes:
+            if entry.note_blocks:
+                body += _odt_sticky(entry.note_blocks, spans)
+            elif entry.notes:
                 body.append(_odt_items("Notes", "List_20_Item", entry.notes))
     content = (_XML + f"<office:document-content {_ODF_NS}>"
                + (f"<office:automatic-styles>{''.join(spans.values())}</office:automatic-styles>" if spans else "")
