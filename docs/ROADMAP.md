@@ -4,7 +4,7 @@ Where Mimick is, and where it's going.
 
 ## 15 October 2026 — formatted notes, sticky titles, linked stickies
 
-Kat's asks (`972a649`, shared code only, not pushed): bold, italics,
+Kat's asks (`972a649`, shared code only, pushed 16 October): bold, italics,
 underline, strikeout and lists in a highlight's note, kept as the annotation's
 rich text (RC) beside its plain Contents; a title on a sticky note, kept as its
 Subject; a sticky linked to the highlight it is about, by the highlight's PDF
